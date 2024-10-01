@@ -1,0 +1,26 @@
+{
+    "name": "be-tpm-new",
+    "version": "0.0.0",
+    "private": true,
+    "scripts": {
+        "start": "node app.js",
+        "deploy-be": "git pull && npm install && pm2 stop 0 && pm2 start 0 && pm2 log 0"
+    },
+    "dependencies": {
+        "axios": "^1.7.4",
+        "bcryptjs": "^2.4.3",
+        "cookie-parser": "~1.4.4",
+        "cors": "^2.8.5",
+        "debug": "~2.6.9",
+        "dotenv": "^16.3.1",
+        "express": "~4.16.1",
+        "http-errors": "~1.6.3",
+        "jsonwebtoken": "^9.0.2",
+        "moment": "^2.29.4",
+        "morgan": "~1.9.1",
+        "node-cron": "^3.0.3",
+        "nodemon": "^3.0.1",
+        "pg": "^8.11.3",
+        "uuidv4": "^6.2.13"
+    }
+}
