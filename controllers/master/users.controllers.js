@@ -1,5 +1,5 @@
 const table = require('../../config/table')
-const { queryPOST, queryPUT, queryGET } = require('../../helpers/query')
+const {queryPOST, queryPUT, queryGET} = require('../../helpers/query')
 
 const response = require('../../helpers/response')
 const getLastIdData = require('../../helpers/getLastIdData')
@@ -14,21 +14,31 @@ const moment = require('moment')
 const queryHandler = require('../queryhandler.function')
 
 module.exports = {
-    getData: async(req, res) => {
+    getData: async (req, res) => {
         try {
+            const {incharge_id} = req.query;
             let cols = ['uuid as user_id', 'user_nm', 'noreg']
+            const filter = [];
+            if (incharge_id && incharge_id != 'null' && incharge_id != '-1') {
+                filter.push(`incharge_id = (select incharge_id from ${table.tb_m_incharge} where uuid = '${incharge_id}')`)
+            }
 
+            let whereClause = 'where 1 = 1';
             let containerFilter = queryHandler(req.query)
-            containerFilter.length > 0 ? containerFilter = "WHERE " + containerFilter.join(" AND ") : containerFilter = ""
+            containerFilter.length > 0 ? containerFilter = "WHERE " + containerFilter.join(" AND ") : containerFilter = "";
 
-            const users = await queryGET(table.tb_m_users, `${containerFilter}`, cols)
+            if (filter.length > 0) {
+                //whereClause = whereClause.concat(` and ${filter.join(" and ")}`);
+            }
+
+            const users = await queryGET(table.tb_m_users, whereClause, cols)
             response.success(res, 'Success to get users', users)
         } catch (error) {
             console.log(error);
             response.failed(res, 'Error to get users')
         }
     },
-    postUser: async(req, res) => {
+    postUser: async (req, res) => {
         try {
             console.log(req.body);
             let idLast = await getLastIdData(table.tb_m_users, 'user_id') + 1
@@ -44,7 +54,7 @@ module.exports = {
             response.failed(res, error)
         }
     },
-    editUser: async(req, res) => {
+    editUser: async (req, res) => {
         try {
             console.log(req.body);
             let id = await uuidToId(table.tb_m_users, 'user_id', req.params.id)
@@ -52,8 +62,8 @@ module.exports = {
             let idGroup = await uuidToId(table.tb_m_groups, 'group_id', req.body.group_id)
             req.body.line_id = idLine
             req.body.group_id = idGroup
-                // let unreadPassword = await security.encryptPassword(req.body.password)
-                // req.body.password = unreadPassword
+            // let unreadPassword = await security.encryptPassword(req.body.password)
+            // req.body.password = unreadPassword
 
             const attrsUserUpdate = await attrsUserUpdateData(req, req.body)
             const result = await queryPUT(table.tb_m_users, attrsUserUpdate, `WHERE user_id = '${id}'`)
@@ -63,7 +73,7 @@ module.exports = {
             response.failed(res, error)
         }
     },
-    deleteUser: async(req, res) => {
+    deleteUser: async (req, res) => {
         try {
             let obj = {
                 deleted_dt: moment().format().split('+')[0].split('T').join(' '),

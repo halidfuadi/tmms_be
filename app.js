@@ -74,7 +74,7 @@ console.log("Cron job scheduled. Waiting for the day to change...");
 var app = express();
 app.use(cors());
 // init_start();
-counter()
+//counter()
 
 app.use(logger("dev"));
 app.use(express.json());

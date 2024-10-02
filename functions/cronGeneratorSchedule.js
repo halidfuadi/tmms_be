@@ -174,7 +174,7 @@ async function cronGeneratorSchedule() {
       // Check if the schedule for this date already exists
       let scheduleData = await queryGET(
         table.tb_r_schedules,
-        `WHERE plan_check_dt = '${formattedDate}' AND actual_check_dt IS NULL AND ledger_itemcheck_id = '${itemcheck.ledger_itemcheck_id}'`
+        `WHERE plan_check_dt::date = '${formattedDate}' AND actual_check_dt IS NULL AND ledger_itemcheck_id = '${itemcheck.ledger_itemcheck_id}'`
       );
 
       const scheduleNotYetCreated = scheduleData.length === 0;
