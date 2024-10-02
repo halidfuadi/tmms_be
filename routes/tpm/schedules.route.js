@@ -12,5 +12,6 @@ router.post('/edit/plandate', schedulesControllers.editPlanDate)
 router.post('/visualization-item-yearly', schedulesControllers.getVusualizeYearly)
 router.get('/getDelayed', schedulesControllers.getDelayedItem)
 router.get('/visualization-trend', schedulesControllers.getVisualTrendMH)
+router.get('/:id', schedulesControllers.getDetailSchedule)
 
 module.exports = router

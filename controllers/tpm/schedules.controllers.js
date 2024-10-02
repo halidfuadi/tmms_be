@@ -54,6 +54,51 @@ function getPreviousMonthRange() {
     };
 }
 
+const scheduleRawSql = (containerFilter, paginate = {}) => {
+
+    const sql = (isCount = false) => (
+        `select 
+            ${isCount ? 'count(*)' : 'vsm.*, row_number() over(order by itemcheck_nm, machine_nm)::INTEGER as no, trsc.schedule_checker_id'} 
+          from 
+            ${table.v_schedules_monthly} vsm
+            left join lateral (
+                                   select 
+                                        uuid as schedule_checker_id  
+                                   from ${table.tb_r_schedule_checker}
+                                   where 
+                                        schedule_id = vsm.id
+                                   limit 1
+                                   ) trsc on true`
+    );
+    const where = `where vsm.deleted_dt is null ${containerFilter ? `and ${containerFilter}` : ''}`;
+
+    let orderBy = '';
+    if (paginate && Object.keys(paginate).length > 0) {
+        orderBy = `order by itemcheck_nm, machine_nm limit ${paginate.limit} offset ${paginate.offset}`;
+    }
+
+    return {
+        sql,
+        where,
+        orderBy
+    }
+};
+
+const schedulePic = async (schedule_id, isActual = false) => {
+    let q = `SELECT 
+                  trsc.uuid as schedule_checker_id,
+                  ${isActual ? 'tmu_actual' : 'tmu'}.uuid as user_id,
+                  ${isActual ? 'tmu_actual' : 'tmu'}.user_nm,
+                  ${isActual ? 'tmu_actual' : 'tmu'}.noreg
+                  FROM tb_r_schedule_checker trsc
+                  LEFT JOIN tb_m_users tmu ON tmu.user_id = trsc.user_id
+                  LEFT JOIN tb_m_users tmu_actual on trsc.actual_user_id = tmu_actual.user_id
+                  WHERE trsc.schedule_id = ${schedule_id}`;
+
+    return (await queryCustom(q)).rows;
+}
+
+
 module.exports = {
     getSchedule: async (req, res) => {
         try {
@@ -71,32 +116,37 @@ module.exports = {
             const page = parseInt(req.query.page) || 1; // Default page is 1
             const offset = (page - 1) * limit;
 
-            // Modify the query to include pagination
-            let schedulesData = await queryGET(
-                table.v_schedules_monthly,
-                `WHERE ${containerFilter} AND deleted_dt IS NULL 
-         ORDER BY itemcheck_nm, machine_nm 
-         LIMIT ${limit} OFFSET ${offset}`
-            );
+            /*const scheduleRawSql = (isCount = false) => {
+                return `select ${isCount ? 'count(*)' : '*, row_number() over(order by itemcheck_nm, machine_nm)::INTEGER as no'} from ${table.v_schedules_monthly}`;
+            };
+            const whereClauseRawSql = `where deleted_dt is null ${containerFilter ? `and ${containerFilter}` : ''}`;
+            const orderByRawSql = `order by itemcheck_nm, machine_nm limit ${limit} offset ${offset}`;*/
 
+            const {sql, where, orderBy} = scheduleRawSql(containerFilter, {
+                limit,
+                offset
+            })
+
+            // Modify the query to include pagination
+            const schedulesData = (await queryCustom(`${sql()} ${where} ${orderBy}`)).rows;
             console.log(schedulesData);
 
-
-            let mapSchedulesPics = await schedulesData.map(async (schedule) => {
+            let mapSchedulesPics = schedulesData.map(async (schedule) => {
                 let schedule_id = await uuidToId(
                     table.tb_r_schedules,
                     "schedule_id",
                     schedule.schedule_id
                 );
+
                 let q = `SELECT 
                   trsc.uuid as schedule_checker_id,
                   tmu.uuid as user_id,
                   tmu.user_nm,
                   tmu.noreg
                   FROM tb_r_schedule_checker trsc
-                  JOIN tb_m_users tmu ON tmu.user_id = trsc.user_id
+                  LEFT JOIN tb_m_users tmu ON tmu.user_id = trsc.user_id
                   WHERE trsc.schedule_id = ${schedule_id}`;
-                let checkers = await queryCustom(q);
+                let checkers = (await queryCustom(q)).rows;
                 let dateOffset =
                     new Date(
                         schedule.val_periodic * schedule.prec_val * timestampDay
@@ -107,30 +157,27 @@ module.exports = {
                             : schedule.plan_check_dt
                     ).getTime();
                 schedule.next_check = new Date(dateOffset);
-                schedule.checkers = checkers.rows;
+                schedule.checkers = checkers ? checkers[0] : {};
                 return schedule;
             });
 
             const waitMapSchedule = await Promise.all(mapSchedulesPics);
-            const keyGroup = req.query.schedule_id
+            /*const keyGroup = req.query.schedule_id
                 ? "schedule_id"
-                : "ledger_itemcheck_id";
-            const groupByItemcheck = await groupFunction(waitMapSchedule, keyGroup);
+                : "ledger_itemcheck_id";*/
+            //const groupByItemcheck = await groupFunction(waitMapSchedule, keyGroup);
 
             // Send the total number of schedules for pagination
-            let totalSchedules = await queryGET(
-                table.v_schedules_monthly,
-                `WHERE ${containerFilter} AND deleted_dt IS NULL`
-            );
+            const countRows = await queryCustom(`${sql(true)} ${where}`);
 
             response.success(res, "Success to get schedules", {
-                schedules: groupByItemcheck,
-               /* schedules: waitMapSchedule.map((item) => {
+                //schedules: groupByItemcheck,
+                schedules: waitMapSchedule.map((item) => {
                     item.day_idx = +item.day_idx // convert string to number
                     item.day_idx_act = +item.day_idx_act // convert string to number
                     return item;
-                }),*/
-                total: groupByItemcheck.length,  // Total number of schedules
+                }),
+                total: parseInt(countRows?.rows ? countRows.rows[0].count : 0),  // Total number of schedules
                 page,
                 limit,
             });
@@ -139,7 +186,29 @@ module.exports = {
             response.failed(res, "Error to get schedules");
         }
     },
+    getDetailSchedule: async (req, res) => {
+        try {
+            const {sql, where} = scheduleRawSql(`schedule_id = '${req.params.id}'`)
+            const raw = `${sql()} ${where}`;
+            let scheduleRows = (await queryCustom(raw)).rows;
+            if (scheduleRows.length === 0) {
+                response.success(res, "success to get detail schedule", null);
+                return;
+            }
 
+            scheduleRows = scheduleRows[0];
+
+            const checkerPic = await schedulePic(scheduleRows.id, false);
+            const actualPic = await schedulePic(scheduleRows.id, true);
+            scheduleRows.checkers = checkerPic ? checkerPic[0] : null;
+            scheduleRows.actualPic = actualPic ? actualPic[0] : null;
+
+            response.success(res, "success to get detail schedule", scheduleRows);
+        } catch (e) {
+            console.log(e);
+            response.failed(res, {message: "Error to get detail schedules", detail: e,});
+        }
+    },
     getTodayActivities: async (req, res) => {
         try {
             /*
@@ -193,36 +262,39 @@ module.exports = {
     addPlanPic: async (req, res) => {
         // Assign PIC convert UUID to ID
         // tb_r_schedule_checker (user_id, schedule_id)
+        let isUpdate = false;
+
         try {
-            let {user_ids, schedule_id} = req.body;
-            let containerArr = [];
-            let last_checker_id = await getLastIdData(
-                table.tb_r_schedule_checker,
-                "schedule_checker_id"
-            );
-            let scheduleId = await uuidToId(
-                table.tb_r_schedules,
-                "schedule_id",
-                schedule_id
-            );
-            for (let i = 0; i < user_ids.length; i++) {
-                let user_id = user_ids[i];
-                let userId = await uuidToId(table.tb_m_users, "user_id", user_id);
-                let objUser = {
-                    schedule_checker_id: last_checker_id + i,
-                    uuid: v4(),
-                    schedule_id: scheduleId,
-                    user_id: userId,
-                };
-                containerArr.push(objUser);
+            let {user_ids, schedule_id, user_id, schedule_checker_id} = req.body;
+            if (user_ids) {
+                response.failed(res, "this action is no longer work");
+                return;
+            } else if (user_id) {
+                const findExists = schedule_checker_id ? (await queryGET(table.tb_r_schedule_checker, `where uuid = '${schedule_checker_id}'`)) : [];
+                if (findExists.length > 0) {
+                    isUpdate = true;
+                    const updateScheduleCheckerRawSql = `update ${table.tb_r_schedule_checker} 
+                                                                set 
+                                                                    user_id = (select user_id from ${table.tb_m_users} where uuid = '${user_id}') 
+                                                                where 
+                                                                    uuid = '${schedule_checker_id}'`;
+                    await queryCustom(updateScheduleCheckerRawSql);
+                } else {
+                    const insertScheduleCheckerRawSql = `insert into ${table.tb_r_schedule_checker} 
+                                                                    (uuid, user_id, schedule_id, created_by, created_dt)
+                                                                values (
+                                                                            '${v4()}', 
+                                                                            (select user_id from ${table.tb_m_users} where uuid = '${user_id}'), 
+                                                                            (select schedule_id from ${table.tb_r_schedules} where uuid = '${schedule_id}'),
+                                                                            'modify schedule',
+                                                                            now()
+                                                                       )`;
+                    await queryCustom(insertScheduleCheckerRawSql);
+
+                }
             }
-            console.log("Disini");
-            console.log(containerArr);
-            let instRes = await queryBulkPOST(
-                table.tb_r_schedule_checker,
-                containerArr
-            );
-            response.success(res, "success to add pic", instRes);
+
+            response.success(res, `success to ${isUpdate ? 'update' : 'add'} pic`, []);
         } catch (error) {
             console.log(error);
             response.failed(res, "Error to add pic");
