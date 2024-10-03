@@ -116,12 +116,6 @@ module.exports = {
             const page = parseInt(req.query.page) || 1; // Default page is 1
             const offset = (page - 1) * limit;
 
-            /*const scheduleRawSql = (isCount = false) => {
-                return `select ${isCount ? 'count(*)' : '*, row_number() over(order by itemcheck_nm, machine_nm)::INTEGER as no'} from ${table.v_schedules_monthly}`;
-            };
-            const whereClauseRawSql = `where deleted_dt is null ${containerFilter ? `and ${containerFilter}` : ''}`;
-            const orderByRawSql = `order by itemcheck_nm, machine_nm limit ${limit} offset ${offset}`;*/
-
             const {sql, where, orderBy} = scheduleRawSql(containerFilter, {
                 limit,
                 offset
@@ -129,7 +123,6 @@ module.exports = {
 
             // Modify the query to include pagination
             const schedulesData = (await queryCustom(`${sql()} ${where} ${orderBy}`)).rows;
-            console.log(schedulesData);
 
             let mapSchedulesPics = schedulesData.map(async (schedule) => {
                 let schedule_id = await uuidToId(
@@ -158,6 +151,7 @@ module.exports = {
                     ).getTime();
                 schedule.next_check = new Date(dateOffset);
                 schedule.checkers = checkers ? checkers[0] : {};
+                schedule.manual_book_file = schedule.manual_book_file ? `${process.env.APP_HOST}/file?path=${schedule.manual_book_file}` : null;
                 return schedule;
             });
 
@@ -180,6 +174,7 @@ module.exports = {
                 total: parseInt(countRows?.rows ? countRows.rows[0].count : 0),  // Total number of schedules
                 page,
                 limit,
+                totalPages: Math.ceil(parseInt(countRows?.rows ? countRows.rows[0].count : 0) / limit),
             });
         } catch (error) {
             console.log(error);
@@ -202,6 +197,7 @@ module.exports = {
             const actualPic = await schedulePic(scheduleRows.id, true);
             scheduleRows.checkers = checkerPic ? checkerPic[0] : null;
             scheduleRows.actualPic = actualPic ? actualPic[0] : null;
+            scheduleRows.manual_book_file = scheduleRows.manual_book_file ? `${process.env.APP_HOST}/file?path=${scheduleRows.manual_book_file}` : null;
 
             response.success(res, "success to get detail schedule", scheduleRows);
         } catch (e) {

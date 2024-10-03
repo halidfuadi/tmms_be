@@ -23,7 +23,6 @@ router.use('/machines', machines)
 const status = require('./status.route')
 router.use('/status', status)
 
-
 router.use('/schedules', schedules)
 router.use('/ledgers', ledgers)
 router.use('/execution', execution)
@@ -39,6 +38,5 @@ router.use('/spareparts', spareparts)
 router.use('/itemcheck-parts', itemcheckParts)
 
 router.use('/users', users)
-
 
 module.exports = router

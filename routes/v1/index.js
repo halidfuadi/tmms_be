@@ -11,4 +11,20 @@ router.get("/", function (req, res) {
 router.use("/login", login);
 router.use("/tpm", tpm);
 
+const fs = require('fs');
+const {base64UrlDecode} = require("../../helpers/uri.helper");
+router.get('/file', (req, res) => {
+  if (fs.existsSync(req.query.path)) {
+    if(req.query.path.includes('pdf')) {
+      res.contentType("application/pdf");
+    }
+    fs.createReadStream(req.query.path).pipe(res)
+  } else {
+    res.status(500)
+    console.log('File not found')
+    res.send('File not found')
+  }
+});
+
+
 module.exports = router;

@@ -5,6 +5,10 @@ function queryHandler(query) {
     }
     let containerFilter = []
     for (let key in query) {
+        if (key.includes('limit') || key.includes('page')) {
+            continue;
+        }
+
         if (key == 'month') {
             key = `(EXTRACT(month from  plan_check_dt), EXTRACT('year' from plan_check_dt))=(${+query['month'].split('-')[1]},${+query['month'].split('-')[0]})`
             containerFilter.push(`${key}`)
@@ -21,6 +25,10 @@ function queryHandler(query) {
     delete query.yearonly
     delete query.date
     for (const key in query) {
+        if (key.includes('limit') || key.includes('page')) {
+            continue;
+        }
+
         let value = query[key]
         if (value !== 'null' && value && value != -1) containerFilter.push(`${key} = '${value}'`)
         if (value == '0') containerFilter.push(`${key} = '${value}'`)
