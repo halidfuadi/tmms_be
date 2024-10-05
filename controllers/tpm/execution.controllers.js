@@ -3,14 +3,16 @@ const {
     queryPOST,
     queryPUT,
     queryGET,
-    queryCustom,
+    queryCustom, queryTransaction, queryPutTransaction, queryPostTransaction,
 } = require("../../helpers/query");
 const queryHandler = require("../queryhandler.function");
 const response = require("../../helpers/response");
 const attrsUserUpdateData = require("../../helpers/addAttrsUserUpdateData");
 const getLastIdData = require("../../helpers/getLastIdData");
-const { v4 } = require("uuid");
+const {v4} = require("uuid");
 const idToUuid = require("../../helpers/idToUuid");
+const fs = require('fs');
+const moment = require('moment');
 
 async function uuidToId(table, col, uuid) {
     console.log(`SELECT ${col} FROM ${table} WHERE uuid = '${uuid}'`);
@@ -19,214 +21,8 @@ async function uuidToId(table, col, uuid) {
     return rawId[0][col];
 }
 
-async function execFinding(res, data) {
-    // SUB_PROGRAM_FINDING
-    // UPDATE tb_r_schedules SET status_id = 2(FINDING), actual_check_dt = payload.date WHERE schedule_id = req.body.schedule_id
-    // UPDATE tb_r_schedule_checker actual_user_id = payload.user_id WHERE schedule_id = req.body.schedule_id
-    // INSERT INTO tb_r_history_checks(schedule_id, checked_val, uuid) VALUES(req.body.schedule_id, payload.checked_val, v4)
-    // INSERT INTO tb_r_finding_checks
-    //     (history_check_id, user_id, problem, action_plan, plan_check_dt)
-    // VALUES
-    //     (history_id, payload.finding.user_id, payload.finding.problem, payload.finding.action_plan, payload.finding.plan_check_dt)
-    try {
-        const lastIdHistoryExec = await getLastIdData(
-            table.tb_r_history_checks,
-            "history_check_id"
-        );
-        const lastIdFinding = await getLastIdData(
-            table.tb_r_finding_checks,
-            "finding_id"
-        );
-
-        const ledger_itemcheck_id = await uuidToId(
-            table.tb_r_ledger_itemchecks,
-            `ledger_itemcheck_id`,
-            data.ledger_itemcheck_id
-        );
-        const schedule_id = await uuidToId(
-            table.tb_r_schedules,
-            `schedule_id`,
-            data.schedule_id
-        );
-
-        const finding_user_id = await uuidToId(
-            table.tb_m_users,
-            `user_id`,
-            data.finding.user_id
-        );
-
-        // Start: Map User Id Converted
-        const actual_user_ids = await data.actual_user_ids.map(
-            async(act_user_id, i) => {
-                let conv_act_user_id = await uuidToId(
-                    table.tb_m_users,
-                    `user_id`,
-                    act_user_id
-                );
-                let conv_plan_user_id = await uuidToId(
-                    table.tb_m_users,
-                    `user_id`,
-                    data.plan_user_ids[i]
-                );
-                return {
-                    actual_user_id: conv_act_user_id,
-                    user_id: conv_plan_user_id,
-                };
-            }
-        );
-        const wait_users_ids = await Promise.all(actual_user_ids);
-
-        for (let idx = 0; idx < wait_users_ids.length; idx++) {
-            const userIds = wait_users_ids[idx];
-            await queryPUT(
-                table.tb_r_schedule_checker,
-                userIds,
-                `WHERE schedule_id = ${schedule_id} AND user_id = '${userIds.user_id}'`
-            );
-        }
-        // End: Map User Id Converted
-
-        const objSchedule = {
-            status_id: 2, // for FINDING
-            actual_check_dt: data.actual_check_dt,
-        };
-
-        const objCheckedExec = {
-            history_check_id: lastIdHistoryExec,
-            schedule_id: schedule_id,
-            uuid: v4(),
-            checked_val: data.checked_val,
-        };
-        const updtItemcheckLastDt = {
-            last_check_dt: data.actual_check_dt,
-        };
-
-        await queryPUT(
-            table.tb_r_schedules,
-            objSchedule,
-            `WHERE schedule_id = ${schedule_id}`
-        );
-
-        let historyInstRes = await queryPOST(
-            table.tb_r_history_checks,
-            objCheckedExec
-        );
-
-        const objFinding = {
-            finding_id: lastIdFinding,
-            history_check_id: historyInstRes.rows[0].history_check_id,
-            uuid: v4(),
-            user_id: finding_user_id,
-            problem: data.finding.problem,
-            action_plan: data.finding.action_plan,
-            status_id: 0,
-            plan_check_dt: data.finding.plan_check_dt,
-        };
-
-        await queryPOST(table.tb_r_finding_checks, objFinding);
-        await queryPUT(
-            table.tb_r_ledger_itemchecks,
-            updtItemcheckLastDt,
-            `WHERE ledger_itemcheck_id = ${ledger_itemcheck_id}`
-        );
-        return response.success(res, "Success to execution schedule check");
-    } catch (error) {
-        console.log(error);
-        return response.failed(res, "Error to execution schedule check");
-    }
-}
-
-async function execNormal(res, data) {
-    // UPDATE tb_r_schedules SET status_id = 1(DONE), actual_check_dt = payload.date WHERE schedule_id = req.body.schedule_id
-    // UPDATE tb_r_schedule_checker actual_user_id = payload.user_id WHERE schedule_id = req.body.schedule_id
-    // INSERT INTO tb_r_history_checks(schedule_id, checked_val, uuid) VALUES(req.body.schedule_id, payload.checked_val, v4)
-
-    try {
-        delete data.finding;
-        const lastIdHistoryExec = await getLastIdData(
-            table.tb_r_history_checks,
-            "history_check_id"
-        );
-        const schedule_id = await uuidToId(
-            table.tb_r_schedules,
-            `schedule_id`,
-            data.schedule_id
-        );
-        const ledger_itemcheck_id = await uuidToId(
-            table.tb_r_ledger_itemchecks,
-            `ledger_itemcheck_id`,
-            data.ledger_itemcheck_id
-        );
-
-        // Start: Map User Id Converted
-        const actual_user_ids = await data.actual_user_ids.map(
-            async(act_user_id, i) => {
-                let conv_act_user_id = await uuidToId(
-                    table.tb_m_users,
-                    `user_id`,
-                    act_user_id
-                );
-                let conv_plan_user_id = await uuidToId(
-                    table.tb_m_users,
-                    `user_id`,
-                    data.plan_user_ids[i]
-                );
-                return {
-                    actual_user_id: conv_act_user_id,
-                    user_id: conv_plan_user_id,
-                };
-            }
-        );
-        const wait_users_ids = await Promise.all(actual_user_ids);
-
-        for (let idx = 0; idx < wait_users_ids.length; idx++) {
-            const userIds = wait_users_ids[idx];
-            await queryPUT(
-                table.tb_r_schedule_checker,
-                userIds,
-                `WHERE schedule_id = ${schedule_id} AND user_id = '${userIds.user_id}'`
-            );
-        }
-        // End: Map User Id Converted
-
-        const objSchedule = {
-            status_id: 4, // for DONE
-            actual_check_dt: data.actual_check_dt,
-            actual_duration: data.actual_duration,
-        };
-        const objCheckedExec = {
-            history_check_id: lastIdHistoryExec,
-            schedule_id: schedule_id,
-            uuid: v4(),
-            checked_val: data.checked_val,
-        };
-        if (data.actual_measurement) {
-            objCheckedExec.act_measurement = +data.actual_measurement;
-        }
-        const updtItemcheckLastDt = {
-            last_check_dt: data.actual_check_dt,
-        };
-        console.log(objCheckedExec);
-        await queryPUT(
-            table.tb_r_schedules,
-            objSchedule,
-            `WHERE schedule_id = ${schedule_id}`
-        );
-        await queryPOST(table.tb_r_history_checks, objCheckedExec);
-        await queryPUT(
-            table.tb_r_ledger_itemchecks,
-            updtItemcheckLastDt,
-            `WHERE ledger_itemcheck_id = ${ledger_itemcheck_id}`
-        );
-        return response.success(res, "Success to execution schedule check");
-    } catch (error) {
-        console.log(error);
-        return response.failed(res, "Error to execution schedule check");
-    }
-}
-
 module.exports = {
-    getExecHistory: async(req, res) => {
+    getExecHistory: async (req, res) => {
         try {
             let schedule_id = await uuidToId(
                 table.tb_r_schedules,
@@ -257,7 +53,7 @@ module.exports = {
                 containerFilter, ["actual_user_id ,user_id"]
             );
             scheduleData[0].execution = executions;
-            const changesIdToUUID = await pic_check.map(async(user, i) => {
+            const changesIdToUUID = await pic_check.map(async (user, i) => {
                 console.log(user);
                 let userData = await queryGET(
                     table.tb_m_users,
@@ -272,23 +68,153 @@ module.exports = {
             response.failed(res, "Error to get execution details");
         }
     },
-    addTpmExecution: async(req, res) => {
+    addTpmExecution: async (req, res) => {
+        let uploadPath = null;
+
         try {
-            console.log(req.body);
-            if (+req.body.is_number) {
-                if (+req.body.checked_val > +req.body.ok_val ||
-                    +req.body.checked_val < +req.body.ng_val
-                ) {
-                    execFinding(res, req.body);
-                } else {
-                    execNormal(res, req.body);
-                }
-            } else {
-                if (req.body.checked_val === req.body.ng_val)
-                    execFinding(res, req.body);
-                else execNormal(res, req.body);
+            if (
+                !req.body.schedule_id
+                || !req.body.actual_check_dt
+                || !req.body.actual_duration
+                || !req.body.actual_user_id
+                || !req.body.ledger_itemcheck_id
+                || !req.body.checked_val
+            ) {
+                response.failed(res, "Data parameter tidak lengkap, lengkapi data terlebih dahulu");
+                return;
             }
+
+            console.log(req.body);
+
+            const isFinding = (+req.body.is_number && (+req.body.checked_val > +req.body.ok_val ||
+                +req.body.checked_val < +req.body.ng_val)) || req.body.checked_val === req.body.ng_val;
+
+            let findStatus = await queryGET(
+                table.tb_m_status,
+                `where ${isFinding ? `lower(status_nm) = 'finding'` : `lower(status_nm) = 'done'`}`
+            );
+
+            if (!findStatus || findStatus.length === 0) {
+                response.failed(res, "Item check status tidak ditemukan, silahkan hubungi pengembang");
+                return;
+            }
+
+            findStatus = findStatus[0];
+
+            const result = await queryTransaction(async (db) => {
+                const objSchedule = {
+                    status_id: findStatus.status_id,
+                    actual_check_dt: req.body.actual_check_dt,
+                    actual_duration: req.body.actual_duration,
+                    changed_dt: moment().format('YYYY-MM-DD'),
+                    changed_by: 'update pengecekan'
+                };
+
+                let scheduleUpdated = await queryPutTransaction(
+                    db,
+                    table.tb_r_schedules,
+                    objSchedule,
+                    `WHERE schedule_id = (select schedule_id from ${table.tb_r_schedules} where uuid ='${req.body.schedule_id}')`
+                );
+
+                if (!scheduleUpdated || scheduleUpdated.rows.length === 0) {
+                    throw new Error("Gagal update schedule");
+                }
+
+                scheduleUpdated = scheduleUpdated.rows[0];
+
+                await db.query(`
+                    update ${table.tb_r_schedule_checker}
+                        set
+                            actual_user_id = (
+                                                 select user_id from ${table.tb_m_users} where uuid = '${req.body.actual_user_id}'
+                                             )
+                        where
+                            schedule_id = ${scheduleUpdated.schedule_id}
+                `);
+
+                await queryPutTransaction(
+                    db,
+                    table.tb_r_ledger_itemchecks,
+                    {
+                        last_check_dt: req.body.actual_check_dt,
+                    },
+                    `WHERE ledger_itemcheck_id = (select ledger_itemcheck_id from ${table.tb_r_ledger_itemchecks} where uuid = '${req.body.ledger_itemcheck_id}')`
+                );
+
+                if (isFinding) {
+                    if (!req.file) {
+                        throw new Error("File harus di masukkan");
+                    }
+
+                    uploadPath = `${req.query.dest}/${req.file.filename}`;
+
+                    const findingObj = typeof req.body.finding === 'string' ? JSON.parse(req.body.finding) : req.body.finding;
+
+                    const objFinding = {
+                        uuid: v4(),
+                        schedule_id: scheduleUpdated.schedule_id,
+                        user_id: `(select  user_id from ${table.tb_m_users} where uuid = '${findingObj.user_id}')`,
+                        problem: findingObj.problem,
+                        action_plan: findingObj.action_plan,
+                        status_id: findStatus.status_id,
+                        plan_check_dt: scheduleUpdated.plan_check_dt,
+                        finding_image: `./uploads/${uploadPath}`,
+                    };
+
+                    const findFinding = await db.query(`select * from ${table.tb_r_finding_checks} where history_check_id = '${scheduleUpdated.schedule_id}'`);
+                    if (findFinding.rows.length > 0) {
+                        await queryPutTransaction(
+                            db,
+                            table.tb_r_finding_checks,
+                            objFinding,
+                            `WHERE finding_check_id = '${findFinding.rows[0].finding_check_id}'`
+                        );
+                    } else {
+                        await queryPostTransaction(
+                            db,
+                            table.tb_r_finding_checks,
+                            objFinding
+                        );
+                    }
+                } else {
+                    const objCheckedExec = {
+                        uuid: v4(),
+                        schedule_id: scheduleUpdated.schedule_id,
+                        checked_val: req.body.checked_val,
+                    };
+
+                    if (req.body.actual_measurement) {
+                        objCheckedExec.act_measurement = +req.body.actual_measurement;
+                    }
+
+                    const findHistoryChecks = await db.query(`select * from ${table.tb_r_history_checks} where schedule_id = '${scheduleUpdated.schedule_id}'`);
+                    if (findHistoryChecks.rows.length > 0) {
+                        await queryPutTransaction(
+                            db,
+                            table.tb_r_history_checks,
+                            objCheckedExec,
+                            `WHERE history_check_id = '${findHistoryChecks.rows[0].history_check_id}'`
+                        );
+                    } else {
+                        await queryPostTransaction(
+                            db,
+                            table.tb_r_history_checks,
+                            objCheckedExec
+                        );
+                    }
+                }
+            });
+
+            response.success(res, "Success to execution schedule check", result);
         } catch (error) {
+            if (uploadPath) {
+                const fullPath = appRoot + `/uploads/${uploadPath}`;
+                if (fs.existsSync(fullPath)) {
+                    fs.unlinkSync(fullPath)
+                }
+            }
+
             console.log(error);
             response.failed(res, "Error to execution schedule check");
         }

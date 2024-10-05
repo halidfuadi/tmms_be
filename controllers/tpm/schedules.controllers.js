@@ -55,10 +55,33 @@ function getPreviousMonthRange() {
 }
 
 const scheduleRawSql = (containerFilter, paginate = {}) => {
+    const lastCheckedRaw =
+        `(
+        select 
+            trrcc.actual_check_dt 
+        from 
+            ${table.tb_r_schedules} trrcc
+        where 
+            trrcc.plan_check_dt::date < vsm.plan_check_dt::date 
+            and trrcc.actual_check_dt is not null 
+        order by trrcc.schedule_id desc limit 1
+    )`;
+
+    const rawAll = `vsm.*, 
+    row_number() over(order by itemcheck_nm, machine_nm)::INTEGER as no, 
+    trsc.schedule_checker_id,
+    ${lastCheckedRaw} as last_checked_dt,
+    trhc.checked_id,
+    case 
+        when trfc.finding_id is not null then
+            'NG' 
+        else    
+            'OK' 
+    end as checked_val`;
 
     const sql = (isCount = false) => (
         `select 
-            ${isCount ? 'count(*)' : 'vsm.*, row_number() over(order by itemcheck_nm, machine_nm)::INTEGER as no, trsc.schedule_checker_id'} 
+            ${isCount ? 'count(*)' : rawAll} 
           from 
             ${table.v_schedules_monthly} vsm
             left join lateral (
@@ -68,7 +91,9 @@ const scheduleRawSql = (containerFilter, paginate = {}) => {
                                    where 
                                         schedule_id = vsm.id
                                    limit 1
-                                   ) trsc on true`
+                                   ) trsc on true
+            left join lateral (select checked_val, uuid as checked_id from ${table.tb_r_history_checks} where schedule_id = vsm.id order by history_check_id desc limit 1) trhc on true
+            left join lateral (select uuid as finding_id, problem, action_plan from ${table.tb_r_finding_checks} where schedule_id = vsm.id limit 1) trfc on true`
     );
     const where = `where vsm.deleted_dt is null ${containerFilter ? `and ${containerFilter}` : ''}`;
 
@@ -340,6 +365,7 @@ module.exports = {
                 // reschedule_changes
                 let changes_plan_check_dt = {
                     plan_check_dt: plan_check_dts,
+                    status_id: `(select status_id from ${table.tb_m_status} where lower(status_nm) = 'revisi')`,
                 };
 
                 await queryPutTransaction(
@@ -356,7 +382,6 @@ module.exports = {
             response.failed(res, "Error to edit plan date");
         }
     },
-
     getDelayedItem: async (rea, res) => {
         try {
             // Get the previous month date range
@@ -390,7 +415,6 @@ module.exports = {
             console.log(error);
         }
     },
-
     getVisualize: async (req, res) => {
         try {
             let containerFilter = queryHandler(req.body);
@@ -500,7 +524,6 @@ module.exports = {
             response.failed(res, "Error to get visualization of item check");
         }
     },
-
     getVisualizeLine: async (req, res) => {
         try {
             let containerFilter = queryHandler(req.body);
@@ -550,7 +573,6 @@ module.exports = {
             response.failed(res, "Error to get visualization of item check");
         }
     },
-
     getVusualizeYearly: async (req, res) => {
         try {
             let containerFilter = queryHandler(req.body);
@@ -605,7 +627,6 @@ module.exports = {
             response.failed(res, "Error to get visualization of item check");
         }
     },
-
     getVisualTrendMH: async (req, res) => {
         try {
             let containerFilter = queryHandler(req.body);

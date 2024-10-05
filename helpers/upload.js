@@ -2,6 +2,7 @@ const multer = require("multer");
 
 const path = require("path");
 const {response} = require("../app");
+const fs = require('fs');
 
 const checkFileType = function (file, cb) { //Allowed file extensions
     const fileTypes = /jpeg|jpg|png|gif|pdf|heif|hevc/;
@@ -26,11 +27,17 @@ const checkFileType = function (file, cb) { //Allowed file extensions
 const storageEngine = multer.diskStorage({
     destination: function (req, file, cb) {
         console.log(file);
-        cb(null, `./uploads`)
-        // cb(null, ".\uploads\")
+
+        const path = `./uploads/${req.query.dest}`;
+        if (!fs.existsSync(path)) {
+            fs.mkdirSync(path, {recursive: true});
+        }
+
+        cb(null, path)
     },
     filename: (req, file, cb) => {
-        cb(null, `${new Date().getTime()}|${req.body.sub_group_activity_id}-${req.body.step_nm}-${file.originalname}`);
+        //cb(null, `${new Date().getTime()}|${req.body.sub_group_activity_id}-${req.body.step_nm}-${file.originalname}`);
+        cb(null, `${Date.now()}--${file.originalname}`);
     },
 });
 

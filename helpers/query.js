@@ -292,7 +292,7 @@ module.exports = {
         containerColumn.push(key);
 
         let value = data[key];
-        if (typeof value === "string" && value.includes("SELECT")) {
+        if (typeof value === "string" && value.toLowerCase().includes("select")) {
           value = `${data[key]}`;
         } else {
           value = `'${data[key]}'`;

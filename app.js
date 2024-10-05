@@ -10,6 +10,8 @@ var routerV1 = require("./routes/v1/index");
 const { database } = require("./config/database");
 database.connect();
 
+global.appRoot = path.resolve(__dirname);
+
 // Middleware for logging API requests
 function logAPIMessages(req, res, next) {
   const timestamp = new Date().toISOString();

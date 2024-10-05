@@ -1,11 +1,19 @@
 const table = require('../../config/table')
-const { queryPOST, queryPUT, queryGET, queryCustom, queryBulkPOST, queryDELETE, querySoftDELETE } = require('../../helpers/query')
+const {
+    queryPOST,
+    queryPUT,
+    queryGET,
+    queryCustom,
+    queryBulkPOST,
+    queryDELETE,
+    querySoftDELETE, queryTransaction
+} = require('../../helpers/query')
 const response = require('../../helpers/response')
-const { groupFunction } = require('../../functions/groupFunction')
+const {groupFunction} = require('../../functions/groupFunction')
 const queryHandler = require('../queryhandler.function')
 const getLastIdData = require('../../helpers/getLastIdData')
 const {getCurrentDateTime} = require('../../functions/getCurrentDateTime')
-const { v4 } = require('uuid')
+const {v4} = require('uuid')
 const moment = require('moment')
 
 async function uuidToId(table, col, uuid) {
@@ -33,7 +41,7 @@ module.exports = {
     sparepartItemcheck: async (req, res) => {
         try {
             let filter = queryHandler(req.query)
-                        
+
             let dataparts = await queryGET(table.v_sparepart_detail, `WHERE ${filter[0]}`)
             console.log(dataparts);
             response.success(res, "success to get data", dataparts)
@@ -82,7 +90,7 @@ module.exports = {
             response.success(res, 'sucess add data')
         } catch (error) {
             console.log(error);
-            response.failed(res, 
+            response.failed(res,
                 "failed add sparepart data, please check your body :) ")
         }
 
@@ -118,23 +126,54 @@ module.exports = {
     itemSparepartAdd: async (req, res) => {
         try {
             let data = req.body
-            console.log(data);            
-            for(let i = 0; i < data.length; i++) {
-                let dataSparepart = {
-                    ledger_sparepart_id: await getLastIdData(table.tb_r_ledger_spareparts, 'ledger_sparepart_id'),
-                    sparepart_id: data[i].sparepart_id,
-                    uuid: v4(),
-                    ledger_itemcheck_id: data[i].ledger_itemcheck_id,
-                    created_dt: getCurrentDateTime(),
-                    created_by: 'USER',
-                    changed_dt: getCurrentDateTime(),
-                    changed_by: 'USER',
-                }
-                console.log(dataSparepart);
-                let upload = await queryPOST(table.tb_r_ledger_spareparts, dataSparepart)
-                console.log(upload);
-                response.success(res, upload.message)
+            //console.log(data);
+
+            if (Array.isArray(data) && data.length === 0) {
+                response.error(res, "Masukkan data yang ingin ditambahkan");
+                return;
             }
+
+            await queryTransaction(async (db) => {
+                const arr = [];
+
+                for (let i = 0; i < data.length; i++) {
+                    arr.push({
+                        ledger_sparepart_id: await getLastIdData(table.tb_r_ledger_spareparts, 'ledger_sparepart_id'),
+                        sparepart_id: data[i].sparepart_id,
+                        uuid: v4(),
+                        ledger_itemcheck_id: /^[0-9A-F]{8}-[0-9A-F]{4}-[4][0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(data[i].ledger_itemcheck_id)
+                            ? await uuidToId(table.tb_r_ledger_itemchecks, 'ledger_itemcheck_id', data[i].ledger_itemcheck_id)
+                            : data[i].ledger_itemcheck_id,
+                        created_dt:
+                            getCurrentDateTime(),
+                        created_by:
+                            'USER',
+                        changed_dt:
+                            getCurrentDateTime(),
+                        changed_by:
+                            'USER',
+                    });
+
+                    /*await db.query(`insert into ${table.tb_r_ledger_spareparts} (ledget_sparepart_id, )`);
+
+                    console.log(dataSparepart);
+                    let upload = await queryPOST(table.tb_r_ledger_spareparts, dataSparepart)
+                    console.log(upload);*/
+                }
+
+                const columns = Object.keys(arr[0]).map((e) => e);
+                const values = arr.map((e) => {
+                    const values = Object.keys(e).map((key) => {
+                        return `'${e[key]}'`;
+                    });
+
+                    return values;
+                });
+
+                await db.query(`insert into ${table.tb_r_ledger_spareparts} (${columns.join(', ')}) values (${values.join(', ')})`);
+            });
+
+            response.success(res, 'sucess add sparepart')
         } catch (error) {
             console.log(error);
             response.error(res, error)
