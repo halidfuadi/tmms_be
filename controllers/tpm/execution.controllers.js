@@ -172,14 +172,6 @@ module.exports = {
                             `WHERE finding_check_id = '${findFinding.rows[0].finding_check_id}'`
                         );
                     } else {
-                        if (findFinding.rows.length > 0) {
-                            await db.query(`delete from ${table.tb_r_finding_checks } where schedule_id = '${scheduleUpdated.schedule_id}'`);
-                            const fullPath = appRoot + findFinding.rows[0].finding_image.substring(1);
-                            if (findFinding.rows[0].finding_image && fs.existsSync(fullPath)) {
-                                fs.unlinkSync(fullPath)
-                            }
-                        }
-
                         await queryPostTransaction(
                             db,
                             table.tb_r_finding_checks,
@@ -187,6 +179,14 @@ module.exports = {
                         );
                     }
                 } else {
+                    if (findFinding.rows.length > 0) {
+                        await db.query(`delete from ${table.tb_r_finding_checks } where schedule_id = '${scheduleUpdated.schedule_id}'`);
+                        const fullPath = appRoot + findFinding.rows[0].finding_image.substring(1);
+                        if (findFinding.rows[0].finding_image && fs.existsSync(fullPath)) {
+                            fs.unlinkSync(fullPath)
+                        }
+                    }
+
                     const objCheckedExec = {
                         uuid: v4(),
                         schedule_id: scheduleUpdated.schedule_id,
