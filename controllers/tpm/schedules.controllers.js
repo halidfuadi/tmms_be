@@ -74,9 +74,11 @@ const scheduleRawSql = (containerFilter, paginate = {}) => {
     trhc.checked_id,
     case 
         when trfc.finding_id is not null then
-            'NG' 
+            'NG'
+        when trhc.checked_id is not null then
+            trhc.checked_val
         else    
-            'OK' 
+            null 
     end as checked_val`;
 
     const sql = (isCount = false) => (

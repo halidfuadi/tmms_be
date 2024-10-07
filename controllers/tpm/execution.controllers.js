@@ -142,6 +142,8 @@ module.exports = {
                     `WHERE ledger_itemcheck_id = (select ledger_itemcheck_id from ${table.tb_r_ledger_itemchecks} where uuid = '${req.body.ledger_itemcheck_id}')`
                 );
 
+                const findFinding = await db.query(`select * from ${table.tb_r_finding_checks} where schedule_id = '${scheduleUpdated.schedule_id}'`);
+
                 if (isFinding) {
                     if (!req.file) {
                         throw new Error("File harus di masukkan");
@@ -162,7 +164,6 @@ module.exports = {
                         finding_image: `./uploads/${uploadPath}`,
                     };
 
-                    const findFinding = await db.query(`select * from ${table.tb_r_finding_checks} where history_check_id = '${scheduleUpdated.schedule_id}'`);
                     if (findFinding.rows.length > 0) {
                         await queryPutTransaction(
                             db,
@@ -171,6 +172,14 @@ module.exports = {
                             `WHERE finding_check_id = '${findFinding.rows[0].finding_check_id}'`
                         );
                     } else {
+                        if (findFinding.rows.length > 0) {
+                            await db.query(`delete from ${table.tb_r_finding_checks } where schedule_id = '${scheduleUpdated.schedule_id}'`);
+                            const fullPath = appRoot + findFinding.rows[0].finding_image.substring(1);
+                            if (findFinding.rows[0].finding_image && fs.existsSync(fullPath)) {
+                                fs.unlinkSync(fullPath)
+                            }
+                        }
+
                         await queryPostTransaction(
                             db,
                             table.tb_r_finding_checks,
