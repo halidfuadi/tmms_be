@@ -58,9 +58,12 @@ module.exports = {
             let q = `
                 select 
                 tms.*
-                from tb_r_ledger_spareparts trls
-                join tb_m_spareparts tms on tms.sparepart_id = trls.sparepart_id
-                where trls.ledger_id = ${filter.ledger_id}
+                from 
+                    tb_r_ledger_spareparts trls
+                    join tb_m_spareparts tms on tms.sparepart_id = trls.sparepart_id
+                    join tb_r_ledger_itemchecks trli on trls.ledger_itemcheck_id = trli.ledger_itemcheck_id
+                    join tb_m_ledgers tml on trli.ledger_id = tml.ledger_id
+                where ${/^-?\d+$/.test(filter.ledger_id) ? `tml.ledger_id = ${filter.ledger_id}` : `tml.uuid = '${filter.ledger_id}'`}
             `
 
             let dataSparepart = (await queryCustom(q)).rows

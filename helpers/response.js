@@ -14,6 +14,18 @@ const success = (res, message = 'Success', data) => {
         // console.log(response);
     res.status(200).json(response)
 }
+
+const successPaginate = (res, message = 'Success', data, paginated) => {
+    let response = {
+        status: 200,
+        message: message,
+        paginated: paginated,
+        data: data,
+    }
+    // console.log(response);
+    res.status(200).json(response)
+}
+
 const error = (res, message) => {
     let response = {
             status: 500,
@@ -48,5 +60,6 @@ module.exports = {
     noContent,
     notFound,
     failed,
-    notAllowed
+    notAllowed,
+    successPaginate,
 }
