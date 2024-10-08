@@ -132,7 +132,12 @@ module.exports = {
             let idLedger = req.query.ledger_id;
             let q = `
             SELECT 
-                tmi.*,
+                trli.uuid as ledger_itemcheck_id,
+                tmm.uuid as machine_id,
+                tml.uuid as ledger_id,
+                tmi.uuid as itemcheck_id,
+                tmp.uuid as periodic_id,
+                tmn.uuid as incharge_id,
                 tmm.machine_nm, 
                 tmi.itemcheck_nm, 
                 tmi.val_periodic, 
@@ -144,13 +149,14 @@ module.exports = {
                 tmi.mp,
                 tmi.details,
                 tmi.period_id,
-                trli.ledger_itemcheck_id,
+                -- trli.ledger_itemcheck_id,
                 -- COALESCE(CAST(trs.plan_check_dt AS DATE), '0001-01-01') AS plan_check_dt,
-                tmi.itemcheck_id,
                 tmn.incharge_nm,                
                 trli.lifespan_counter,
                 trli.is_counter
                 ,tmlns.line_nm
+                ,tmi.lower_limit
+                ,tmi.upper_limit
                 -- trs.schedule_id 
             FROM 
                 tb_r_ledger_itemchecks trli 
@@ -191,7 +197,7 @@ module.exports = {
     },
     getUpdate: async (req, res) => {
         let q = `
-            SELECT*,
+            SELECT *,
                 tmm.machine_nm,
                 tmp.period_nm
             FROM tb_r_ledger_added trla

@@ -84,7 +84,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
 app.use(logAPIMessages);
-
+app.use(require('./middlware/clean-request.middleware'));
 app.use("/", routerV1);
 
 // Mulai server

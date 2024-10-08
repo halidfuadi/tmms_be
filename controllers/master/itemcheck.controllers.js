@@ -1,6 +1,13 @@
 const table = require('../../config/table');
 const getLastIdData = require('../../helpers/getLastIdData');
-const {queryPOST, queryPUT, queryGET, queryCustom} = require('../../helpers/query')
+const {
+    queryPOST,
+    queryPUT,
+    queryGET,
+    queryCustom,
+    queryTransaction,
+    queryPostTransaction, queryPutTransaction
+} = require('../../helpers/query')
 const response = require('../../helpers/response')
 const queryHandler = require('../queryhandler.function')
 const {v4} = require('uuid');
@@ -21,6 +28,8 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
                 tmm.uuid as machine_id,
                 tml.uuid as ledger_id,
                 tmp.uuid as periodic_id,
+                tmll.uuid as line_id,
+                tmin.uuid as incharge_id,
                 tmi.itemcheck_nm,
                 tmm.machine_nm,
                 tmp.period_nm,
@@ -58,6 +67,7 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
                             join ${table.tb_m_ledgers} tml ON tml.ledger_id = trli.ledger_id
                             join ${table.tb_m_machines} tmm ON tmm.machine_id = tml.machine_id
                             join ${table.tb_m_lines} tmll on tmll.line_id = tmm.line_id
+                            left join ${table.tb_m_incharge} tmin on tmin.incharge_id = tmi.incharge_id
                             left join ${table.tb_m_periodics} tmp ON tmi.period_id = tmp.period_id
                             left join lateral (
                                                 select 
@@ -88,10 +98,106 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
     }
 }
 
+const ledgerIdRaw = (req) => (`(select ledger_id from ${table.tb_m_ledgers} where uuid = '${req.body.ledger_id}')`);
+const itemCheckIdRaw = (req) => (`(select itemcheck_id from ${table.tb_m_itemchecks} where uuid = '${req.body.itemcheck_id}')`);
+const ledgerItemCheckIdRaw = (req) => (`(select ledger_itemcheck_id from ${table.tb_r_ledger_itemchecks} where uuid = '${req.body.ledger_itemcheck_id}')`);
+
+const findExistsAddedOrChanges = async (db, req, isNew) => {
+    let whereLedgerItemCheckRaw = `and (trli.ledger_id = ${ledgerIdRaw(req)} and trli.itemcheck_id = ${itemCheckIdRaw(req)})
+                                                    or (trli.ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
+                                                    or (lower(tmi.item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+
+    let whereLedgerAddedRaw = `and (ledger_id = ${ledgerIdRaw(req)} and itemcheck_id = ${itemCheckIdRaw(req)})
+                                                    or (ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
+                                                    or (lower(item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+
+    let whereLedgerChangesRaw = ``;
+    if (!isNew) {
+        whereLedgerItemCheckRaw = `or (lower(tmi.item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+        whereLedgerAddedRaw = `or (lower(item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+    }
+
+    const findExistsLedgerItemCheckRaw = `select 
+                                                    trli.* 
+                                                   from 
+                                                    ${table.tb_r_ledger_itemchecks} trli
+                                                    join ${table.tb_m_itemchecks} tmi ON tmi.itemcheck_id = trli.itemcheck_id 
+                                                   where 
+                                                    1 = 1 ${whereLedgerItemCheckRaw}`;
+
+    let findExists = await db.query(findExistsLedgerItemCheckRaw);
+    if (findExists.rows && findExists.rows.length > 0) {
+        return true;
+    }
+
+    const findExistsLedgerAddedRaw = `select 
+                                                    * 
+                                                   from 
+                                                    ${table.tb_r_ledger_added} 
+                                                   where 
+                                                    1 = 1 ${whereLedgerAddedRaw}`;
+
+    findExists = await db.query(findExistsLedgerAddedRaw);
+
+    if (findExists.rows && findExists.rows.length > 0) {
+        return true;
+    }
+
+    /*const findExistsLedgerChangesRaw = `select
+                                                    * 
+                                                   from 
+                                                    ${table.tb_r_ledger_changes} 
+                                                   where 
+                                                    1 = 1 ${whereLedgerAddedRaw}`;*/
+
+    return false;
+}
+
+const mappedItemCheckFromBody = async (req, isNew) => {
+    let newItem = {
+        uuid: v4(),
+        itemcheck_std_id: 1,
+        period_id: req.body.period_id ? req.body.period_id : null,
+        incharge_id: req.body.incharge_id ? `(select incharge_id from ${table.tb_m_incharge} where uuid = '${req.body.incharge_id}')` : null,
+        val_periodic: req.body.period_id ? req.body.val_period : null,
+        itemcheck_loc: req.body.itemcheck_loc,
+        method_check: req.body.method_check,
+        duration: req.body.duration,
+        mp: +req.body.mp,
+        is_counter: req.body.period_id == null || req.body.is_counter,
+        approval: false,
+        reasons: req.body.reasons,
+        standard_measurement: req.body.standard_measurement,
+        condition: 'Waiting',
+        lifespan_counter: +req.body.lifespan_counter,
+        init_counter_dt: 'now()',
+        upper_limit: req.body.upper_limit ? +req.body.upper_limit : null,
+        lower_limit: req.body.lower_limit ? +req.body.lower_limit : null,
+        details: req.body.details ? req.body.details : null,
+        created_by: 'system',
+        created_dt: 'now()',
+        changed_by: 'system',
+        changed_dt: 'now()',
+    }
+
+    if (isNew) {
+        newItem = {
+            ...newItem,
+            itemcheck_nm: req.body.itemcheck_nm,
+            ledger_id: req.body.ledger_id ? ledgerIdRaw(req) : null,
+            itemcheck_id: req.body.itemcheck_id ? itemCheckIdRaw(req) : null,
+            ledger_itemcheck_id: req.body.ledger_itemcheck_id ? ledgerItemCheckIdRaw(req) : null,
+            init_counter: req.body.ledger_id ? (await queryGET(table.tb_m_ledgers, `WHERE uuid = '${req.body.ledger_id}'`))[0].last_counter : req.body.init_counter,
+        };
+    }
+
+    return newItem;
+}
+
 module.exports = {
     getItemchecks: async (req, res) => {
         try {
-            let containerFilter = queryHandler(req.query)
+            let containerFilter = queryHandler(req.query, 'itemcheck_nm')
             containerFilter.length > 0
                 ? (containerFilter = containerFilter.join(" AND "))
                 : (containerFilter = "");
@@ -138,12 +244,44 @@ module.exports = {
             })
         }
     },
-    getItemcheck: async (req, res) => {
+    getBaseItemcheck: async (req, res) => {
         try {
             let containerFilter = queryHandler(req.query)
-            containerFilter.length > 0 ? containerFilter = 'WHERE ' + containerFilter.join(" AND ") : containerFilter = ""
-            const itemchecks = await queryGET(table.tb_m_itemchecks, containerFilter)
-            response.success(res, 'success to get itemcheck', itemchecks)
+            containerFilter.length > 0
+                ? containerFilter = containerFilter.join(" AND ")
+                : containerFilter = "";
+
+            const limit = req.query.limit ? parseInt(req.query.limit) : null; // Default limit is 10
+            const page = req.query.page ? parseInt(req.query.page) : null; // Default page is 1
+            const offset = limit && page ? (page - 1) * limit : null;
+
+            const whereRaw = `where 1 = 1 ${containerFilter ? `and ${containerFilter}` : ''}`;
+            let rawSql = (isCount = false) => (`select ${isCount ? 'count(*)' : 'row_number() over(order by created_dt desc)::INTEGER as no, *'} from ${table.tb_m_itemchecks} `);
+
+            let orderBy = `order by created_dt desc`;
+            if ((limit && page) && Object.keys(limit && page).length > 0) {
+                orderBy += ` limit ${limit} offset ${offset}`;
+            }
+
+            const result = (await queryCustom(`${rawSql()} ${whereRaw} ${orderBy}`)).rows;
+
+            if (limit && page) {
+                const countRows = (await queryCustom(`${rawSql(true)} ${whereRaw} ${orderBy}`));
+
+                response.successPaginate(
+                    res,
+                    'success to get itemcheck',
+                    result,
+                    {
+                        page,
+                        limit,
+                        totalPages: Math.ceil(parseInt(countRows?.rows ? countRows.rows[0].count : 0) / limit),
+                        total: parseInt(countRows?.rows ? countRows.rows[0].count : 0),
+                    }
+                );
+            } else {
+                response.success(res, 'success to get itemcheck', result)
+            }
         } catch (error) {
             console.error(error)
             response.failed(res, 'Error to get itemcheck')
@@ -151,95 +289,16 @@ module.exports = {
     },
     addItemCheck: async (req, res) => {
         try {
-            let itemCheckData = req.body
-            itemCheckData.itemcheck_id = await getLastIdData(table.tb_m_itemchecks, 'itemcheck_id')
-            itemCheckData.ledger_itemcheck_id = await getLastIdData(table.tb_r_ledger_itemchecks, 'ledger_itemcheck_id')
-            itemCheckData.changed_dt = getCurrentDateTime()
-            itemCheckData.created_dt = getCurrentDateTime()
-            itemCheckData.changed_by = 'USER'
-            itemCheckData.created_by = 'USER'
-            itemCheckData.uuid_item = v4()
-            itemCheckData.uuid_ledger_item = v4()
-            let test = await queryGET(table.tb_m_ledgers, `WHERE ledger_id = ${itemCheckData.ledger_id}`)
-            console.log(test);
-
-
-            let newItem = {}
-
-            if (itemCheckData.period_id == null) {
-                newItem = {
-                    is_counter: true,
-                    ledger_added_id: await getLastIdData(table.tb_r_ledger_added, 'ledger_added_id'),
-                    ledger_itemcheck_id: itemCheckData.ledger_itemcheck_id,
-                    uuid: itemCheckData.uuid_item,
-                    ledger_id: itemCheckData.ledger_id,
-                    itemcheck_id: itemCheckData.itemcheck_id,
-                    created_by: itemCheckData.created_by,
-                    created_dt: itemCheckData.created_dt,
-                    changed_by: itemCheckData.changed_by,
-                    changed_dt: itemCheckData.changed_dt,
-                    // last_check_dt: '2000-01-01 00:00:00',                
-                    approval: false,
-                    reasons: itemCheckData.reasons,
-                    itemcheck_nm: itemCheckData.itemcheck_nm,
-                    itemcheck_loc: itemCheckData.itemcheck_loc,
-                    method_check: itemCheckData.itemcheck_method,
-                    duration: itemCheckData.duration,
-                    mp: +itemCheckData.mp,
-                    // initial_date: '2000-01-01 00:00:00',
-                    itemcheck_std_id: 1,
-                    standard_measurement: itemCheckData.standard_measurement,
-                    incharge_id: await uuidToId(table.tb_m_incharge, 'incharge_id', itemCheckData.incharge_id),
-                    details: itemCheckData.details,
-                    condition: 'Waiting',
-                    lifespan_counter: +itemCheckData.lifespan_counter,
-                    init_counter: (await queryGET(table.tb_m_ledgers, `WHERE ledger_id = ${itemCheckData.ledger_id}`))[0].last_counter,
-                    init_counter_dt: getCurrentDateTime(),
+            const result = await queryTransaction(async (db) => {
+                const findExists = await findExistsAddedOrChanges(db, req, true);
+                if (findExists) {
+                    throw new Error("Item check ini sudah di tambahkan");
                 }
-            } else {
-                newItem = {
-                    is_counter: false,
-                    ledger_added_id: await getLastIdData(table.tb_r_ledger_added, 'ledger_added_id'),
-                    ledger_itemcheck_id: itemCheckData.ledger_itemcheck_id,
-                    uuid: itemCheckData.uuid_item,
-                    ledger_id: itemCheckData.ledger_id,
-                    itemcheck_id: itemCheckData.itemcheck_id,
-                    created_by: itemCheckData.created_by,
-                    created_dt: itemCheckData.created_dt,
-                    changed_by: itemCheckData.changed_by,
-                    changed_dt: itemCheckData.changed_dt,
-                    last_check_dt: itemCheckData.plan_check_dt,
-                    approval: false,
-                    reasons: itemCheckData.reasons,
-                    period_id: itemCheckData.period_id,
-                    itemcheck_nm: itemCheckData.itemcheck_nm,
-                    itemcheck_loc: itemCheckData.itemcheck_loc,
-                    method_check: itemCheckData.itemcheck_method,
-                    duration: itemCheckData.duration,
-                    mp: +itemCheckData.mp,
-                    val_periodic: itemCheckData.val_period,
-                    initial_date: itemCheckData.plan_check_dt,
-                    itemcheck_std_id: 1,
-                    standard_measurement: itemCheckData.standard_measurement,
-                    incharge_id: await uuidToId(table.tb_m_incharge, 'incharge_id', itemCheckData.incharge_id),
-                    details: itemCheckData.details,
-                    condition: 'Waiting',
-                }
-            }
 
+                return (await queryPostTransaction(db, table.tb_r_ledger_added, mappedItemCheckFromBody(req, true))).rows
+            });
 
-            if (itemCheckData.upper_limit) {
-                newItem.upper_limit = +itemCheckData.upper_limit;
-            }
-
-            if (itemCheckData.lower_limit) {
-                newItem.lower_limit = +itemCheckData.lower_limit;
-            }
-
-            console.log(newItem);
-            const item = await queryPOST(table.tb_r_ledger_added, newItem)
-
-            response.success(res, 'sucess add data')
+            response.success(res, 'sucess add data', result)
         } catch (error) {
             console.log(error);
             response.failed(res, {
@@ -251,12 +310,21 @@ module.exports = {
     editItemCheck: async (req, res) => {
         try {
             let newData = req.body
-            console.log(newData);
-            let oldData = await queryGET(table.tb_m_itemchecks, `WHERE itemcheck_id = ${newData.itemcheck_id}`)
-            console.log(oldData);
+
+            if (!newData.incharge_id) {
+                response.failed(res, 'Incharge is empty, please select incharge first');
+                return;
+            }
+
+            let oldData = await queryGET(table.tb_m_itemchecks, `WHERE uuid = '${newData.itemcheck_id}'`)
+            if (!oldData || oldData?.length === 0) {
+                response.failed(res, 'Error to Edit data, Item check not found');
+                return;
+            }
+
             oldData = oldData[0]
+
             let joinData = {
-                ledger_changes_id: await getLastIdData(table.tb_r_ledger_changes, 'ledger_changes_id'),
                 itemcheck_id: oldData.itemcheck_id,
                 itemcheck_nm_old: oldData.itemcheck_nm,
                 itemcheck_nm_new: newData.itemcheck_nm,
@@ -266,53 +334,46 @@ module.exports = {
                 itemcheck_loc_new: newData.itemcheck_loc,
                 mp_old: oldData.mp,
                 mp_new: +newData.mp,
-                period_id_old: oldData.period_id,
-                period_id_new: +newData.period_id,
+                period_id_old: oldData.period_id ? oldData.period_id : null,
+                period_id_new: newData.period_id ? +newData.period_id : null,
                 method_check_old: oldData.method_check,
                 method_check_new: newData.method_check,
                 duration_old: oldData.duration,
                 duration_new: +newData.duration,
-                val_periodic_old: oldData.val_periodic,
-                val_periodic_new: +newData.val_periodic,
-                // initial_date: Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Jakarta', dateStyle: 'full', timeStyle: 'long'}).format(oldData.initial_date),
+                val_periodic_old: oldData.val_periodic ? oldData.val_periodic : null,
+                val_periodic_new: newData.val_periodic ? +newData.val_periodic : null,
                 initial_date: oldData.initial_date,
                 created_by: 'SYSTEM',
                 created_dt: getCurrentDateTime(),
                 changed_by: 'USER',
                 changed_dt: getCurrentDateTime(),
                 incharge_id_old: oldData.incharge_id,
-                incharge_id_new: await uuidToId(table.tb_m_incharge, 'incharge_id', newData.incharge_id),
+                incharge_id_new: newData.incharge_id ? `(select incharge_id from ${table.tb_m_incharge} where uuid = '${req.body.incharge_id}')` : null,
                 standard_measurement_old: oldData.standard_measurement,
                 standard_measurement_new: newData.standard_measurement,
                 approval: false,
                 uuid: v4(),
-                // last_check_dt: Intl.DateTimeFormat('en-US', {timeZone: 'Asia/Jakarta', dateStyle: 'full', timeStyle: 'long'}).format(oldData.last_check_dt),
                 last_check_dt: oldData.last_check_dt,
                 itemcheck_std_id: oldData.itemcheck_std_id,
-                ledger_id: newData.ledger_id,
+                ledger_id: req.body.ledger_id ? ledgerIdRaw(req) : null,
                 upper_limit_old: oldData.upper_limit !== null ? oldData.upper_limit : 0,
                 upper_limit_new: +newData.upper_limit,
                 lower_limit_old: oldData.lower_limit !== null ? oldData.lower_limit : 0,
                 lower_limit_new: +newData.lower_limit,
-                reason: newData.reason,
-                is_counter: newData.is_counter
+                reason: newData.reasons,
+                is_counter: newData.is_counter,
+                lifespan_counter_old: oldData.lifespan_counter ? +oldData.lifespan_counter : null,
+                lifespan_counter_new: newData.lifespan_counter ? +newData.lifespan_counter : null,
             }
-
-            if (newData.is_counter) {
-                joinData.lifespan_counter_new = +newData.lifespan_counter
-                joinData.lifespan_counter_old = +oldData.lifespan_counter
-            }
-
-            console.log("HERE==================================");
-            console.log(joinData);
 
             const insert = await queryPOST(table.tb_r_ledger_changes, joinData)
-
-            console.log(joinData);
-
+            response.success(res, 'sucess edit item check', insert)
         } catch (error) {
             console.log(error);
-            response.failed(res, 'Error to Edit data')
+            response.failed(res, {
+                message: 'Error to item check',
+                error: error,
+            })
         }
     },
     approveItemCheck: async (req, res) => {
@@ -338,7 +399,7 @@ module.exports = {
                     tmm.machine_nm
                 FROM tb_r_ledger_changes trlc
                 JOIN tb_m_machines tmm ON tmm.machine_id = trlc.ledger_id
-                WHERE trlc.approval = false
+                WHERE (trlc.approval = false or trlc.approval is null)
             `
             let updated = (await queryCustom(q)).rows
             console.log("disini");
@@ -372,14 +433,11 @@ module.exports = {
                 // lifespan_counter: +data.lifespan_counter_new
             }
 
-            if (data.is_counter) {
-
-            }
-
             const updated = await queryPUT(table.tb_m_itemchecks, newData, `WHERE itemcheck_id = ${data.itemcheck_id}`)
             let approve = {
                 approval: true
             }
+
             const history = await queryPUT(table.tb_r_ledger_changes, approve, `WHERE ledger_changes_id = ${data.ledger_changes_id}`)
             response.success(res, 'Success to Update Data', updated)
 
@@ -397,14 +455,18 @@ module.exports = {
             if (!data.is_counter) {
                 item = {
                     itemcheck_id: await getLastIdData(table.tb_m_itemchecks, 'itemcheck_id'),
-                    period_id: data.period_id,
                     uuid: v4(),
                     itemcheck_nm: data.itemcheck_nm,
                     itemcheck_loc: data.itemcheck_loc,
                     method_check: data.method_check,
                     duration: data.duration,
                     mp: data.mp,
+
+                    /**/
+                    period_id: data.period_id,
                     val_periodic: data.val_periodic,
+                    /**/
+
                     initial_date: data.initial_date,
                     created_by: 'SYSTEM',
                     created_dt: getCurrentDateTime(),
@@ -495,8 +557,48 @@ module.exports = {
                 WHERE ledger_added_id = ${data.ledger_added_id}
             `
             const updateTRLA = await queryCustom(q)
-            response.success(res, "Succes to add data", updateTRLA)
 
+            const result = await queryTransaction(async (db) => {
+                const addedItemCheckRaw = `
+                    select 
+                        trla.ledger_added_id,
+                        tmi.itemcheck_id,
+                        tml.ledger_id,
+                        tmm.machine_id,
+                        tmll.line_id,
+                        tmp.period_id
+                    from
+                        tb_r_ledger_added trla
+                            left join tb_m_itemchecks tmi ON tmi.itemcheck_id = trla.itemcheck_id
+                            left join tb_m_ledgers tml ON tml.ledger_id = trla.ledger_id
+                            left join tb_m_machines tmm ON tmm.machine_id = tml.machine_id
+                            left join tb_m_lines tmll on tmll.line_id = tmm.line_id
+                            left join tb_m_periodics tmp ON tmi.period_id = tmp.period_id
+                    where 
+                        trla.uuid = '${req.body.ledger_added_id}'
+                `;
+
+                const addedItemChecks = (await db.query(addedItemCheckRaw)).rows[0];
+
+                await queryPutTransaction(
+                    db,
+                    table.tb_r_ledger_added,
+                    {
+                        approval: true,
+                    },
+                    ``
+                );
+
+                if (!addedItemChecks.itemcheck_id) {
+                    queryPostTransaction(
+                        db,
+                        table.tb_m_itemchecks,
+                        {}
+                    );
+                }
+            });
+
+            response.success(res, "Succes to add data", updateTRLA)
         } catch (error) {
             console.log(error);
             response.error(res, error)

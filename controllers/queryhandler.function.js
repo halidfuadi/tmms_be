@@ -1,4 +1,4 @@
-function queryHandler(query) {
+function queryHandler(query, likeKey = null) {
     const keyExists = Object.keys(query).length > 0
     if (!keyExists) {
         return []
@@ -25,12 +25,22 @@ function queryHandler(query) {
     delete query.yearonly
     delete query.date
     for (const key in query) {
-        if (key.includes('limit') || key.includes('page')) {
+        if (
+            key.includes('limit')
+            || key.includes('page')
+            || key.includes('group_by')
+        ) {
             continue;
         }
 
         let value = query[key]
-        if (value !== 'null' && value && value != -1) containerFilter.push(`${key} = '${value}'`)
+        if (value !== 'null' && value && value != -1) {
+            if (typeof likeKey === 'string' && key.toLowerCase().includes(likeKey)) {
+                containerFilter.push(`lower(${key}) like '%${typeof value === 'string' ? value.toLowerCase() : value}%'`);
+            } else {
+                containerFilter.push(`${key} = '${value}'`);
+            }
+        }
         if (value == '0') containerFilter.push(`${key} = '${value}'`)
     }
     return containerFilter
