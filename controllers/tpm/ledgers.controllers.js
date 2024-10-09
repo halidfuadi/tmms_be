@@ -61,6 +61,51 @@ const ledgerRawSql = (containerFilter, paginate = {}) => {
     }
 }
 
+const newLedgerRawSql = (containerFilter, paginate = {}) => {
+    const rawAll = `tmm.uuid  as machine_id,
+                            tml.uuid  as line_id,
+                            tmls.uuid as ledger_id,
+                            tmm.machine_nm,
+                            tml.line_nm,
+                            trli.num_item_checks,
+                            tmm.created_dt`;
+
+    let rowNumb = paginate ? `row_number() over(order by created_dt desc)::INTEGER as no,` : '';
+    const sql = (isCount = false) => (
+        `select 
+            ${isCount ? 'count(*)' : rowNumb + '*'}  
+            from (
+                select
+                    ${rawAll} 
+                from
+                    ${table.tb_m_machines} tmm
+                    join ${table.tb_m_ledgers} tmls on tmls.machine_id = tmm.machine_id
+                    join ${table.tb_m_lines} tml on tml.line_id = tmm.line_id
+                    left join lateral (select
+                                           count(*) as num_item_checks
+                                       from
+                                           ${table.tb_r_ledger_itemchecks} trli1
+                                       where
+                                             trli1.ledger_id = tmm.machine_id
+                                             and trli1.deleted_dt is null) trli on true
+                where tmm.deleted_by is null
+            ) a`
+    );
+
+    const where = `where 1 = 1 ${containerFilter ? `and ${containerFilter}` : ''}`;
+
+    let orderBy = ``;
+    if (paginate && Object.keys(paginate).length > 0) {
+        orderBy = `order by created_dt desc limit ${paginate.limit} offset ${paginate.offset}`;
+    }
+
+    return {
+        sql: sql,
+        where,
+        orderBy
+    }
+};
+
 module.exports = {
     getLedgers: async (req, res) => {
         try {
@@ -196,18 +241,28 @@ module.exports = {
         }
     },
     getUpdate: async (req, res) => {
-        let q = `
-            SELECT *,
-                tmm.machine_nm,
-                tmp.period_nm
+        try {
+            const isCount = req.query.count && req.query.count === true;
+
+            const rawAll = `*, tmm.machine_nm, tmp.period_nm`;
+            let q = `
+            SELECT 
+                ${isCount ? 'count(*) as total' : rawAll}
             FROM tb_r_ledger_added trla
             JOIN tb_m_machines tmm ON trla.ledger_id = tmm.machine_id
             LEFT JOIN tb_m_periodics tmp ON tmp.period_id = trla.period_id
             WHERE trla.approval = false
         `
-        let updateData = (await queryCustom(q)).rows
-        console.log(updateData);
-        response.success(res, 'succes to get updated item', updateData)
+            let updateData = (await queryCustom(q)).rows
+            console.log(updateData);
+            response.success(res, 'succes to get new item request', updateData)
+        } catch (e) {
+            console.log(e);
+            response.failed(res, {
+                message: 'Error to get new item request',
+                error: e,
+            })
+        }
     },
     newLedger: async (req, res) => {
         try {

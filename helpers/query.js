@@ -97,11 +97,9 @@ module.exports = {
                 for (const key in data) {
                     containerColumn.push(key);
                     let value = data[key];
-                    if (typeof value === "string" && (value.includes("select") || value.toLowerCase().includes('now')))
-                    {
+                    if (typeof value === "string" && (value.includes("select") || value.toLowerCase().includes('now'))) {
                         value = `${data[key]}`;
-                    } else
-                    {
+                    } else {
                         value = `'${data[key]}'`;
                     }
 
@@ -336,14 +334,18 @@ module.exports = {
         return new Promise(async (resolve, reject) => {
             let containerSetValues = [];
             for (const key in data) {
-                if (data[key] == "CURRENT_TIMESTAMP") {
+                if (typeof data[key] === 'string' && data[key].toLowerCase().includes('now')) {
+                    containerSetValues.push(`${key} = ${data[key]}`);
+                } else if (data[key] == "CURRENT_TIMESTAMP") {
                     containerSetValues.push(`${key} = CURRENT_TIMESTAMP`);
                 } else if (data[key] && data[key] != "null") {
                     let value = data[key];
                     if (typeof value === "string" && value.includes("select")) {
                         value = `${data[key]}`;
-                    } else {
+                    } else if (typeof value === "string") {
                         value = `'${data[key]}'`;
+                    } else {
+                        value = `${data[key]}`;
                     }
 
                     containerSetValues.push(`${key} = ${value}`);

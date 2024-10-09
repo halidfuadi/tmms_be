@@ -15,13 +15,6 @@ const idToUuid = require('../../helpers/idToUuid');
 const {cronGeneratorSchedule} = require('../../functions/cronGeneratorSchedule');
 const {getCurrentDateTime} = require('../../functions/getCurrentDateTime')
 
-async function uuidToId(table, col, uuid) {
-    console.log(`SELECT ${col} FROM ${table} WHERE uuid = '${uuid}'`);
-    // `SELECT ${col} FROM ${table} WHERE uuid = '${uuid}'`
-    let rawId = await queryGET(table, `WHERE uuid = '${uuid}'`, [col])
-    return rawId[0][col]
-}
-
 const itemCheckRawSql = (containerFilter, paginate = {}) => {
     const rawAll = `tmi.uuid as itemcheck_id,
                 trli.uuid as ledger_itemcheck_id,
@@ -51,7 +44,8 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
                 trli.init_counter,
                 trli.init_counter_dt,
                 trli.est_dt,
-                trli.current_counter`;
+                trli.current_counter,
+                tmin.incharge_nm`;
 
     let rowNumb = paginate ? `row_number() over(order by created_dt desc)::INTEGER as no,` : '';
 
@@ -104,17 +98,16 @@ const ledgerItemCheckIdRaw = (req) => (`(select ledger_itemcheck_id from ${table
 
 const findExistsAddedOrChanges = async (db, req, isNew) => {
     let whereLedgerItemCheckRaw = `and (trli.ledger_id = ${ledgerIdRaw(req)} and trli.itemcheck_id = ${itemCheckIdRaw(req)})
-                                                    or (trli.ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
-                                                    or (lower(tmi.item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+                                                    and (trli.ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
+                                                    and (lower(tmi.itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
 
     let whereLedgerAddedRaw = `and (ledger_id = ${ledgerIdRaw(req)} and itemcheck_id = ${itemCheckIdRaw(req)})
-                                                    or (ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
-                                                    or (lower(item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+                                                    and (ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
+                                                    and (lower(itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
 
-    let whereLedgerChangesRaw = ``;
     if (!isNew) {
-        whereLedgerItemCheckRaw = `or (lower(tmi.item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
-        whereLedgerAddedRaw = `or (lower(item_check_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+        whereLedgerItemCheckRaw = `or (lower(tmi.itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+        whereLedgerAddedRaw = `or (lower(itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
     }
 
     const findExistsLedgerItemCheckRaw = `select 
@@ -181,13 +174,15 @@ const mappedItemCheckFromBody = async (req, isNew) => {
     }
 
     if (isNew) {
+        const findLedger = req.body.ledger_id ? (await queryGET(table.tb_m_ledgers, `WHERE uuid = '${req.body.ledger_id}'`)) : [];
+
         newItem = {
             ...newItem,
             itemcheck_nm: req.body.itemcheck_nm,
             ledger_id: req.body.ledger_id ? ledgerIdRaw(req) : null,
             itemcheck_id: req.body.itemcheck_id ? itemCheckIdRaw(req) : null,
             ledger_itemcheck_id: req.body.ledger_itemcheck_id ? ledgerItemCheckIdRaw(req) : null,
-            init_counter: req.body.ledger_id ? (await queryGET(table.tb_m_ledgers, `WHERE uuid = '${req.body.ledger_id}'`))[0].last_counter : req.body.init_counter,
+            init_counter: findLedger.length > 0 ? findLedger[0].last_counter : req.body.init_counter,
         };
     }
 
@@ -295,10 +290,12 @@ module.exports = {
                     throw new Error("Item check ini sudah di tambahkan");
                 }
 
-                return (await queryPostTransaction(db, table.tb_r_ledger_added, mappedItemCheckFromBody(req, true))).rows
+                const data = await mappedItemCheckFromBody(req, true);
+                const added = (await queryPostTransaction(db, table.tb_r_ledger_added, data)).rows
+                return added;
             });
 
-            response.success(res, 'sucess add data', result)
+            response.success(res, 'sucess add data')
         } catch (error) {
             console.log(error);
             response.failed(res, {
@@ -376,6 +373,97 @@ module.exports = {
             })
         }
     },
+    getNewItemRequest: async (req, res) => {
+        try {
+            const isCount = req.query.count && req.query.count === "true";
+
+            const rawAll = `trla.uuid as ledger_added_id,
+                tmi.uuid  as itemcheck_id,
+                tml.uuid  as ledger_id,
+                tmll.uuid as line_id,
+                tmm.uuid  as machine_id,
+                tmp.uuid  as periodic_id,
+                trla.itemcheck_nm,
+                trla.itemcheck_loc,
+                trla.reasons,
+                trla.changed_by,
+                trla.changed_dt,
+                tmm.machine_nm`;
+            let q = `
+                            select 
+                                ${isCount ? 'count(*) as total' : rawAll}
+                            from
+                                tb_r_ledger_added trla
+                                    left join tb_m_itemchecks tmi ON tmi.itemcheck_id = trla.itemcheck_id
+                                    left join tb_m_ledgers tml ON tml.ledger_id = trla.ledger_id
+                                    left join tb_m_machines tmm ON tmm.machine_id = tml.machine_id
+                                    left join tb_m_lines tmll on tmll.line_id = tmm.line_id
+                                    left join tb_m_periodics tmp ON tmi.period_id = tmp.period_id 
+                            where 
+                                (trla.approval = false or trla.approval is null)`
+            let updateData = (await queryCustom(q)).rows
+            console.log(updateData);
+            response.success(res, 'succes to get new item request', updateData);
+        } catch (e) {
+            console.log(e);
+            response.failed(res, {
+                message: 'Error to get new item request',
+                error: e,
+            });
+        }
+    },
+    getChangeItemRequest: async (req, res) => {
+        try {
+            const isCount = req.query.count && req.query.count === "true";
+
+            const rawAll = `trla.uuid as ledger_changes_id,
+                                        tmi.uuid  as itemcheck_id,
+                                        tml.uuid  as ledger_id,
+                                        tmll.uuid as line_id,
+                                        tmm.uuid  as machine_id,
+                                        trla.itemcheck_nm_new,
+                                        trla.itemcheck_nm_old,
+                                        trla.itemcheck_loc_old,
+                                        trla.itemcheck_loc_new,
+                                        trla.method_check_new,
+                                        trla.method_check_old,
+                                        trla.duration_new,
+                                        trla.duration_old,
+                                        trla.mp_new,
+                                        trla.mp_old,
+                                        trla.reason,
+                                        trla.changed_by,
+                                        tmp_old.period_nm as period_nm_old,
+                                        tmp_new.period_nm as period_nm_new,
+                                        trla.standard_measurement_new,
+                                        trla.standard_measurement_old,
+                                        trla.upper_limit_new,
+                                        trla.upper_limit_old,
+                                        trla.lower_limit_new,
+                                        trla.lower_limit_old,
+                                        tmm.machine_nm`;
+
+            let q = `select
+                                        ${isCount ? 'count(*) as total' : rawAll}            
+                                    from
+                                        tb_r_ledger_changes trla
+                                            left join tb_m_itemchecks tmi ON tmi.itemcheck_id = trla.itemcheck_id
+                                            left join tb_m_ledgers tml ON tml.ledger_id = trla.ledger_id
+                                            left join tb_m_machines tmm ON tmm.machine_id = tml.machine_id
+                                            left join tb_m_lines tmll on tmll.line_id = tmm.line_id
+                                            left join tb_m_periodics tmp_old ON trla.period_id_old = tmp_old.period_id
+                                            left join tb_m_periodics tmp_new ON trla.period_id_new = tmp_new.period_id
+                                    where (trla.approval = false or trla.approval is null)`;
+            let updated = (await queryCustom(q)).rows
+            response.success(res, 'succes to get updated item', updated)
+        } catch (error) {
+            console.log(error);
+            response.failed(res, {
+                message: 'Error to get new item request',
+                error: error,
+            });
+        }
+    },
     approveItemCheck: async (req, res) => {
         try {
             let item = req.body
@@ -391,175 +479,66 @@ module.exports = {
 
         }
     },
-    getUpdate: async (req, res) => {
+    approvedChangeItem: async (req, res) => {
         try {
-            let q = `
-                SELECT
-                    trlc.*,
-                    tmm.machine_nm
-                FROM tb_r_ledger_changes trlc
-                JOIN tb_m_machines tmm ON tmm.machine_id = trlc.ledger_id
-                WHERE (trlc.approval = false or trlc.approval is null)
-            `
-            let updated = (await queryCustom(q)).rows
-            console.log("disini");
-            console.log(updated);
-            response.success(res, 'succes to get updated item', updated)
-        } catch (error) {
-            console.log(error);
-        }
-    },
-    approvedItem: async (req, res) => {
-        try {
-            let data = req.body
-
-            let newData = {
-                period_id: data.period_id_new,
-                uuid: await idToUuid(table.tb_m_itemchecks, 'itemcheck_id', data.itemcheck_id),
-                itemcheck_nm: data.itemcheck_nm_new,
-                itemcheck_loc: data.itemcheck_loc_new,
-                method_check: data.method_check_new,
-                duration: data.duration_new,
-                mp: data.mp_new,
-                val_periodic: data.val_periodic_new,
-                initial_date: data.initial_date,
-                changed_by: 'USER',
-                changed_dt: getCurrentDateTime(),
-                incharge_id: data.incharge_id_new,
-                standard_measurement: data.standard_measurement_new,
-                upper_limit: +data.upper_limit_new,
-                lower_limit: +data.lower_limit_new,
-                details: data.details_new,
-                // lifespan_counter: +data.lifespan_counter_new
+            let findChanges = (await queryCustom(`select * from ${table.tb_r_ledger_changes} where uuid = '${req.body.ledger_changes_id}'`)).rows;
+            if (findChanges && findChanges.length === 0) {
+                response.error(res, 'Item change request not found');
+                return;
             }
 
-            const updated = await queryPUT(table.tb_m_itemchecks, newData, `WHERE itemcheck_id = ${data.itemcheck_id}`)
-            let approve = {
-                approval: true
-            }
+            findChanges = findChanges[0];
 
-            const history = await queryPUT(table.tb_r_ledger_changes, approve, `WHERE ledger_changes_id = ${data.ledger_changes_id}`)
-            response.success(res, 'Success to Update Data', updated)
+            const result = await queryTransaction(async (db) => {
+                await queryPutTransaction(
+                    db,
+                    table.tb_r_ledger_changes,
+                    {
+                        approval: true,
+                        changed_by: 'approval',
+                        changed_dt: 'now()',
+                    },
+                    `WHERE ledger_changes_id = ${findChanges.ledger_changes_id}`
+                );
 
+                let newData = {
+                    period_id: findChanges.period_id_new,
+                    itemcheck_nm: findChanges.itemcheck_nm_new,
+                    itemcheck_loc: findChanges.itemcheck_loc_new,
+                    method_check: findChanges.method_check_new,
+                    duration: parseInt(findChanges.duration_new),
+                    mp: parseInt(findChanges.mp_new),
+                    val_periodic: findChanges.val_periodic_new,
+                    initial_date: findChanges.initial_date,
+                    changed_by: 'approval',
+                    changed_dt: 'now()',
+                    incharge_id: findChanges.incharge_id_new,
+                    standard_measurement: findChanges.standard_measurement_new,
+                    upper_limit: findChanges.upper_limit_new ? parseInt(findChanges.upper_limit_new) : null,
+                    lower_limit: findChanges.lower_limit_new ? parseInt(findChanges.lower_limit_new) : null,
+                    details: findChanges.details_new,
+                }
+
+                await queryPutTransaction(
+                    db,
+                    table.tb_m_itemchecks,
+                    newData,
+                    `WHERE uuid = ${findChanges.itemcheck_id}`
+                );
+            });
+
+            response.success(res, 'Success to approve item check', result);
         } catch (error) {
             console.log(error);
-            response.error(res, `Error to Approve Data : ${error}`)
+            response.error(res, {
+                message: `Error to approve item check`,
+                error: error,
+            })
         }
     },
     approvedNewItem: async (req, res) => {
         try {
-            let data = req.body
-            console.log(data);
-
-            let item = {}
-            if (!data.is_counter) {
-                item = {
-                    itemcheck_id: await getLastIdData(table.tb_m_itemchecks, 'itemcheck_id'),
-                    uuid: v4(),
-                    itemcheck_nm: data.itemcheck_nm,
-                    itemcheck_loc: data.itemcheck_loc,
-                    method_check: data.method_check,
-                    duration: data.duration,
-                    mp: data.mp,
-
-                    /**/
-                    period_id: data.period_id,
-                    val_periodic: data.val_periodic,
-                    /**/
-
-                    initial_date: data.initial_date,
-                    created_by: 'SYSTEM',
-                    created_dt: getCurrentDateTime(),
-                    changed_by: 'SYSTEM',
-                    changed_dt: getCurrentDateTime(),
-                    incharge_id: data.incharge_id,
-                    last_check_dt: data.last_check_dt,
-                    itemcheck_std_id: data.itemcheck_std_id,
-                    standard_measurement: data.standard_measurement,
-                    details: data.details,
-                }
-            } else {
-                item = {
-                    itemcheck_id: await getLastIdData(table.tb_m_itemchecks, 'itemcheck_id'),
-                    uuid: v4(),
-                    itemcheck_nm: data.itemcheck_nm,
-                    itemcheck_loc: data.itemcheck_loc,
-                    method_check: data.method_check,
-                    duration: data.duration,
-                    mp: data.mp,
-                    initial_date: "2000-01-01 00:00:00",
-                    created_by: 'SYSTEM',
-                    created_dt: getCurrentDateTime(),
-                    changed_by: 'SYSTEM',
-                    changed_dt: getCurrentDateTime(),
-                    incharge_id: data.incharge_id,
-                    last_check_dt: "2000-01-01 00:00:00",
-                    itemcheck_std_id: data.itemcheck_std_id,
-                    standard_measurement: data.standard_measurement,
-                    details: data.details,
-                }
-            }
-
-            if (data.lower_limit) {
-                item.lower_limit = +data.lower_limit
-            }
-
-            if (data.upper_limit) {
-                item.upper_limit = +data.upper_limit
-            }
-
-            console.log(item);
-
-            const updateItemcheck = await queryPOST(table.tb_m_itemchecks, item)
-
-            let ledgerItem = {}
-
-            if (data.is_counter) {
-                ledgerItem = {
-                    is_counter: true,
-                    ledger_itemcheck_id: await getLastIdData(table.tb_r_ledger_itemchecks, 'ledger_itemcheck_id'),
-                    uuid: v4(),
-                    ledger_id: data.ledger_id,
-                    itemcheck_id: item.itemcheck_id,
-                    created_by: 'SYSTEM',
-                    created_dt: getCurrentDateTime(),
-                    changed_by: 'SYSTEM',
-                    changed_dt: getCurrentDateTime(),
-                    last_check_dt: "2000-01-01 00:00:00",
-                    lifespan_counter: +data.lifespan_counter,
-                    init_counter: +data.init_counter,
-                    init_counter_dt: data.init_counter_dt,
-                }
-            } else {
-                ledgerItem = {
-                    is_counter: false,
-                    ledger_itemcheck_id: await getLastIdData(table.tb_r_ledger_itemchecks, 'ledger_itemcheck_id'),
-                    uuid: v4(),
-                    ledger_id: data.ledger_id,
-                    itemcheck_id: item.itemcheck_id,
-                    created_by: 'SYSTEM',
-                    created_dt: getCurrentDateTime(),
-                    changed_by: 'SYSTEM',
-                    changed_dt: getCurrentDateTime(),
-                    last_check_dt: data.last_check_dt,
-                }
-            }
-
-            const updatedLedger = await queryPOST(table.tb_r_ledger_itemchecks, ledgerItem)
-
-            let q = `
-                UPDATE tb_r_ledger_added
-                SET
-                    approval = true,
-                    itemcheck_id = ${item.itemcheck_id},
-                    ledger_itemcheck_id = ${ledgerItem.ledger_itemcheck_id},
-                    condition = 'Approved'
-                WHERE ledger_added_id = ${data.ledger_added_id}
-            `
-            const updateTRLA = await queryCustom(q)
-
-            const result = await queryTransaction(async (db) => {
-                const addedItemCheckRaw = `
+            const addedItemCheckRaw = `
                     select 
                         trla.ledger_added_id,
                         tmi.itemcheck_id,
@@ -578,30 +557,94 @@ module.exports = {
                         trla.uuid = '${req.body.ledger_added_id}'
                 `;
 
-                const addedItemChecks = (await db.query(addedItemCheckRaw)).rows[0];
+            let addedItemChecks = (await queryCustom(addedItemCheckRaw)).rows;
 
+            if (!addedItemChecks || addedItemChecks.length === 0) {
+                response.error(res, "Data not found");
+                return;
+            }
+
+            addedItemChecks = addedItemChecks[0];
+
+            const result = await queryTransaction(async (db) => {
                 await queryPutTransaction(
                     db,
                     table.tb_r_ledger_added,
                     {
                         approval: true,
+                        changed_by: 'approval',
+                        changed_dt: 'now()',
                     },
-                    ``
+                    `where ledger_added_id = '${addedItemChecks.ledger_added_id}'`
                 );
 
                 if (!addedItemChecks.itemcheck_id) {
-                    queryPostTransaction(
+                    let item = {
+                        uuid: v4(),
+                        itemcheck_nm: addedItemChecks.itemcheck_nm,
+                        itemcheck_loc: addedItemChecks.itemcheck_loc,
+                        method_check: addedItemChecks.method_check,
+                        duration: addedItemChecks.duration,
+                        mp: addedItemChecks.mp,
+                        period_id: addedItemChecks.period_id,
+                        val_periodic: addedItemChecks.val_periodic,
+                        lifespan_counter: +addedItemChecks.lifespan_counter,
+                        initial_date: addedItemChecks.initial_date,
+                        created_by: 'approval',
+                        created_dt: getCurrentDateTime(),
+                        changed_by: 'approval',
+                        changed_dt: getCurrentDateTime(),
+                        incharge_id: addedItemChecks.incharge_id,
+                        last_check_dt: addedItemChecks.last_check_dt,
+                        itemcheck_std_id: addedItemChecks.itemcheck_std_id,
+                        standard_measurement: addedItemChecks.standard_measurement,
+                        details: addedItemChecks.details,
+                        lower_limit: addedItemChecks.lower_limit ? +addedItemChecks.lower_limit : 0,
+                        upper_limit: addedItemChecks.upper_limit ? +addedItemChecks.upper_limit : 0,
+                    };
+
+                    await queryPostTransaction(
                         db,
                         table.tb_m_itemchecks,
-                        {}
+                        item
                     );
                 }
+
+                const rawFindExistsLedgerItemCheck = `select * from ${table.tb_r_ledger_itemchecks} where ledger_id = ${addedItemChecks.ledger_id} and itemcheck_id = ${addedItemChecks.itemcheck_id}`;
+                const findExistsLedgerItemCheck = (await db.query(rawFindExistsLedgerItemCheck)).rows;
+                if (findExistsLedgerItemCheck && findExistsLedgerItemCheck.length > 0) {
+                    throw "Ledger item check exists";
+                }
+
+                const ledgerItem = {
+                    uuid: v4(),
+                    is_counter: addedItemChecks.is_counter,
+                    ledger_id: addedItemChecks.ledger_id,
+                    itemcheck_id: addedItemChecks.itemcheck_id,
+                    created_by: 'approval',
+                    created_dt: getCurrentDateTime(),
+                    changed_by: 'approval',
+                    changed_dt: getCurrentDateTime(),
+                    //last_check_dt: "2000-01-01 00:00:00",
+                    lifespan_counter: addedItemChecks.lifespan_counter ? +addedItemChecks.lifespan_counter : 0,
+                    init_counter: addedItemChecks.init_counter ? +addedItemChecks.init_counter : 0,
+                    init_counter_dt: addedItemChecks.init_counter_dt,
+                };
+
+                await queryPostTransaction(
+                    db,
+                    table.tb_r_ledger_itemchecks,
+                    ledgerItem
+                );
             });
 
-            response.success(res, "Succes to add data", updateTRLA)
+            response.success(res, "Succes to approve item request")
         } catch (error) {
             console.log(error);
-            response.error(res, error)
+            response.error(res, {
+                message: "Error to approve item request",
+                error: error,
+            })
         }
     },
     deleteItemCheck: async (req, res) => {
@@ -644,13 +687,28 @@ module.exports = {
             console.log(error);
         }
     },
-    denyAdded: async (req, res) => {
+    denyNewItem: async (req, res) => {
         try {
             let deny = req.body
             let q = `
                 UPDATE tb_r_ledger_added
-                SET approval = TRUE, condition = 'Denied'
-                WHERE ledger_added_id = ${deny.ledger_added_id}
+                SET approval = true, condition = 'Denied'
+                WHERE uuid = '${deny.ledger_added_id}'
+            `
+            const denied = await queryCustom(q)
+            response.success(res, 'Request Denied', denied)
+        } catch (error) {
+            console.log(error);
+            response.error(res, 'error deny new item request')
+        }
+    },
+    denyChangeItem: async (req, res) => {
+        try {
+            let deny = req.body
+            let q = `
+                UPDATE tb_r_ledger_changes
+                SET approval = true, condition = 'Denied'
+                WHERE uuid = '${deny.ledger_changes_id}'
             `
             const denied = await queryCustom(q)
             response.success(res, 'Request Denied', denied)
@@ -659,21 +717,4 @@ module.exports = {
             response.error(res, 'Error')
         }
     },
-    denyEdit: async (req, res) => {
-        try {
-            let deny = req.body
-            let q = `
-                UPDATE tb_r_ledger_changes
-                SET approval = TRUE, condition = 'Denied'
-                WHERE ledger_changes_id = ${deny.ledger_changes_id}
-            `
-            const denied = await queryCustom(q)
-            response.success(res, 'Request Denied', denied)
-        } catch (error) {
-            console.log(error);
-            response.error(res, 'Error')
-        }
-    }
-
-
 }
