@@ -25,11 +25,16 @@ async function uuidToId(table, col, uuid) {
 module.exports = {
   getCounter: async (req, res) => {
     try {
-      let filter = queryHandler(req.query);
-      // console.log(filter);
+      const month = req.query.month;
+      if(req.query.month == null || req.query.month){
+          delete req.query.month;
+      }
+      let filter = queryHandler(req.query)
+      filter.length > 0 ? filter = 'WHERE ' + filter.join(" AND ") : filter = " WHERE deleted_by IS NULL"
+      let filterMonth = month != null ? " AND EXTRACT(MONTH FROM est_dt) = " + month : ""
       let data = await queryGET(
         table.v_tpm_counter,
-        filter + "WHERE deleted_by IS NULL ORDER BY est_dt ASC"
+        filter + filterMonth  + " ORDER BY est_dt ASC"
       );
       data.forEach((item) => {
         item.percentage = Math.round(
