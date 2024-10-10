@@ -6,7 +6,7 @@ const {
     queryCustom,
     queryBulkPOST,
     queryDELETE,
-    querySoftDELETE, queryTransaction
+    querySoftDELETE, queryTransaction, mapBulkValues
 } = require('../../helpers/query')
 const response = require('../../helpers/response')
 const {groupFunction} = require('../../functions/groupFunction')
@@ -37,7 +37,6 @@ module.exports = {
             response.failed(res, "failed get sparepart data")
         }
     },
-
     sparepartItemcheck: async (req, res) => {
         try {
             let filter = queryHandler(req.query)
@@ -50,7 +49,35 @@ module.exports = {
             response.failed(res, "failed get sparepart data")
         }
     },
+    sparepartItemcheckDelete: async (req, res) => {
+        try {
+            let wCond = `where uuid = ${req.params.uuid}`
 
+            const findExists = await queryGET(
+                table.tb_r_ledger_spareparts,
+                wCond
+            );
+
+            if (findExists && findExists.rows.length == 0) {
+                response.error(res, "Error to delete item check, item check not found");
+                return;
+            }
+
+            await querySoftDELETE(
+                table.tb_r_ledger_spareparts,
+                wCond.replace("where", " "),
+                'user'
+            )
+
+            response.success(res, 'Success to delete sparepart item check')
+        } catch (error) {
+            console.log(error);
+            response.failed(res, {
+                message: "Error to delete sparepart item check",
+                error: error,
+            });
+        }
+    },
     sparepartsGetDetail: async (req, res) => {
         try {
             let filter = req.query
@@ -74,7 +101,6 @@ module.exports = {
             response.failed(res, "failed get sparepart data")
         }
     },
-
     sparepartAdd: async (req, res) => {
         try {
             let data = req.query
@@ -125,7 +151,6 @@ module.exports = {
             response.failed(res, "failed delete sparepart data, please check your body :) ")
         }
     },
-
     itemSparepartAdd: async (req, res) => {
         try {
             let data = req.body
@@ -140,12 +165,20 @@ module.exports = {
                 const arr = [];
 
                 for (let i = 0; i < data.length; i++) {
+                    const ledgerItemCheckId = await uuidToId(table.tb_r_ledger_itemchecks, 'ledger_itemcheck_id', data[i].ledger_itemcheck_id);
+
+                    const rawFindExists = `select * from ${table.tb_r_ledger_spareparts} where sparepart_id = ${data[i].sparepart_id} and ledger_itemcheck_id = ${ledgerItemCheckId}`;
+                    const findExists = (await db.query(rawFindExists)).rows;
+                    if (findExists.length > 0) {
+                        continue;
+                    }
+
                     arr.push({
                         ledger_sparepart_id: await getLastIdData(table.tb_r_ledger_spareparts, 'ledger_sparepart_id'),
                         sparepart_id: data[i].sparepart_id,
                         uuid: v4(),
                         ledger_itemcheck_id: /^[0-9A-F]{8}-[0-9A-F]{4}-[4][0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(data[i].ledger_itemcheck_id)
-                            ? await uuidToId(table.tb_r_ledger_itemchecks, 'ledger_itemcheck_id', data[i].ledger_itemcheck_id)
+                            ? ledgerItemCheckId
                             : data[i].ledger_itemcheck_id,
                         created_dt:
                             getCurrentDateTime(),
@@ -156,24 +189,11 @@ module.exports = {
                         changed_by:
                             'USER',
                     });
-
-                    /*await db.query(`insert into ${table.tb_r_ledger_spareparts} (ledget_sparepart_id, )`);
-
-                    console.log(dataSparepart);
-                    let upload = await queryPOST(table.tb_r_ledger_spareparts, dataSparepart)
-                    console.log(upload);*/
                 }
 
-                const columns = Object.keys(arr[0]).map((e) => e);
-                const values = arr.map((e) => {
-                    const values = Object.keys(e).map((key) => {
-                        return `'${e[key]}'`;
-                    });
-
-                    return values;
-                });
-
-                await db.query(`insert into ${table.tb_r_ledger_spareparts} (${columns.join(', ')}) values (${values.join(', ')})`);
+                const {columns, values} = mapBulkValues(arr);
+                const rawInsert = `insert into ${table.tb_r_ledger_spareparts} (${columns.join(', ')}) values ${values.join(', ')}`;
+                await db.query(rawInsert);
             });
 
             response.success(res, 'sucess add sparepart')

@@ -38,5 +38,6 @@ router.use('/spareparts', spareparts)
 router.use('/itemcheck-parts', itemcheckParts)
 
 router.use('/users', users)
+router.use('/ledger-sparepart', require('./ledgerSparepart.route'))
 
 module.exports = router

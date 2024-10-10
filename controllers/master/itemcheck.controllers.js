@@ -6,14 +6,16 @@ const {
     queryGET,
     queryCustom,
     queryTransaction,
-    queryPostTransaction, queryPutTransaction
+    queryPostTransaction, queryPutTransaction, mapBulkValues, querySoftDELETE
 } = require('../../helpers/query')
 const response = require('../../helpers/response')
 const queryHandler = require('../queryhandler.function')
 const {v4} = require('uuid');
 const idToUuid = require('../../helpers/idToUuid');
 const {cronGeneratorSchedule} = require('../../functions/cronGeneratorSchedule');
-const {getCurrentDateTime} = require('../../functions/getCurrentDateTime')
+const {getCurrentDateTime} = require('../../functions/getCurrentDateTime');
+
+const ledgerSparepartServices = require("../../services/ledgerSparepart.service");
 
 const itemCheckRawSql = (containerFilter, paginate = {}) => {
     const rawAll = `tmi.uuid as itemcheck_id,
@@ -47,7 +49,7 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
                 trli.current_counter,
                 tmin.incharge_nm`;
 
-    let rowNumb = paginate ? `row_number() over(order by created_dt desc)::INTEGER as no,` : '';
+    let rowNumb = paginate ? `row_number() over(order by itemcheck_nm)::INTEGER as no,` : '';
 
     const sql = (isCount = false) => (
         `select 
@@ -82,7 +84,7 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
 
     let orderBy = ``;
     if (paginate && Object.keys(paginate).length > 0) {
-        orderBy = `order by created_dt desc limit ${paginate.limit} offset ${paginate.offset}`;
+        orderBy = `order by itemcheck_nm limit ${paginate.limit} offset ${paginate.offset}`;
     }
 
     return {
@@ -92,22 +94,22 @@ const itemCheckRawSql = (containerFilter, paginate = {}) => {
     }
 }
 
-const ledgerIdRaw = (req) => (`(select ledger_id from ${table.tb_m_ledgers} where uuid = '${req.body.ledger_id}')`);
-const itemCheckIdRaw = (req) => (`(select itemcheck_id from ${table.tb_m_itemchecks} where uuid = '${req.body.itemcheck_id}')`);
-const ledgerItemCheckIdRaw = (req) => (`(select ledger_itemcheck_id from ${table.tb_r_ledger_itemchecks} where uuid = '${req.body.ledger_itemcheck_id}')`);
+const ledgerIdRaw = (ledger_id) => (`(select ledger_id from ${table.tb_m_ledgers} where uuid = '${ledger_id}')`);
+const itemCheckIdRaw = (itemcheck_id) => (`(select itemcheck_id from ${table.tb_m_itemchecks} where uuid = '${itemcheck_id}')`);
+const ledgerItemCheckIdRaw = (ledger_itemcheck_id) => (`(select ledger_itemcheck_id from ${table.tb_r_ledger_itemchecks} where uuid = '${ledger_itemcheck_id}')`);
 
-const findExistsAddedOrChanges = async (db, req, isNew) => {
-    let whereLedgerItemCheckRaw = `and (trli.ledger_id = ${ledgerIdRaw(req)} and trli.itemcheck_id = ${itemCheckIdRaw(req)})
-                                                    and (trli.ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
-                                                    and (lower(tmi.itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+const findExistsAddedOrChanges = async (db, request, isNew) => {
+    let whereLedgerItemCheckRaw = `and (trli.ledger_id = ${ledgerIdRaw(request.ledger_id)} and trli.itemcheck_id = ${itemCheckIdRaw(request.itemcheck_id)})
+                                                    -- and (trli.ledger_itemcheck_id = ${ledgerItemCheckIdRaw(request.ledger_itemcheck_id)})
+                                                    and (lower(tmi.itemcheck_nm) like '%${request.itemcheck_nm.toLowerCase()}%')`;
 
-    let whereLedgerAddedRaw = `and (ledger_id = ${ledgerIdRaw(req)} and itemcheck_id = ${itemCheckIdRaw(req)})
-                                                    and (ledger_itemcheck_id = ${ledgerItemCheckIdRaw(req)})
-                                                    and (lower(itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+    let whereLedgerAddedRaw = `and (ledger_id = ${ledgerIdRaw(request.ledger_id)} and itemcheck_id = ${itemCheckIdRaw(request.itemcheck_id)})
+                                                    and (ledger_itemcheck_id = ${ledgerItemCheckIdRaw(request.ledger_itemcheck_id)})
+                                                    and (lower(itemcheck_nm) like '%${request.itemcheck_nm.toLowerCase()}%')`;
 
     if (!isNew) {
-        whereLedgerItemCheckRaw = `or (lower(tmi.itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
-        whereLedgerAddedRaw = `or (lower(itemcheck_nm) like '%${req.body.itemcheck_nm.toLowerCase()}%')`;
+        whereLedgerItemCheckRaw = `or (lower(tmi.itemcheck_nm) like '%${request.itemcheck_nm.toLowerCase()}%')`;
+        whereLedgerAddedRaw = `or (lower(itemcheck_nm) like '%${request.itemcheck_nm.toLowerCase()}%')`;
     }
 
     const findExistsLedgerItemCheckRaw = `select 
@@ -128,7 +130,7 @@ const findExistsAddedOrChanges = async (db, req, isNew) => {
                                                    from 
                                                     ${table.tb_r_ledger_added} 
                                                    where 
-                                                    1 = 1 ${whereLedgerAddedRaw}`;
+                                                    deleted_dt is null  ${whereLedgerAddedRaw}`;
 
     findExists = await db.query(findExistsLedgerAddedRaw);
 
@@ -146,27 +148,27 @@ const findExistsAddedOrChanges = async (db, req, isNew) => {
     return false;
 }
 
-const mappedItemCheckFromBody = async (req, isNew) => {
+const mappedItemCheckFromBody = async (request, isNew) => {
     let newItem = {
         uuid: v4(),
         itemcheck_std_id: 1,
-        period_id: req.body.period_id ? req.body.period_id : null,
-        incharge_id: req.body.incharge_id ? `(select incharge_id from ${table.tb_m_incharge} where uuid = '${req.body.incharge_id}')` : null,
-        val_periodic: req.body.period_id ? req.body.val_period : null,
-        itemcheck_loc: req.body.itemcheck_loc,
-        method_check: req.body.method_check,
-        duration: req.body.duration,
-        mp: +req.body.mp,
-        is_counter: req.body.period_id == null || req.body.is_counter,
+        period_id: request.period_id ? request.period_id : null,
+        incharge_id: request.incharge_id ? `(select incharge_id from ${table.tb_m_incharge} where uuid = '${request.incharge_id}')` : null,
+        val_periodic: request.period_id ? request.val_period : null,
+        itemcheck_loc: request.itemcheck_loc,
+        method_check: request.method_check,
+        duration: request.duration,
+        mp: +request.mp,
+        is_counter: request.period_id == null || request.is_counter,
         approval: false,
-        reasons: req.body.reasons,
-        standard_measurement: req.body.standard_measurement,
+        reasons: request.reasons,
+        standard_measurement: request.standard_measurement,
         condition: 'Waiting',
-        lifespan_counter: +req.body.lifespan_counter,
+        lifespan_counter: +request.lifespan_counter,
         init_counter_dt: 'now()',
-        upper_limit: req.body.upper_limit ? +req.body.upper_limit : null,
-        lower_limit: req.body.lower_limit ? +req.body.lower_limit : null,
-        details: req.body.details ? req.body.details : null,
+        upper_limit: request.upper_limit ? +request.upper_limit : null,
+        lower_limit: request.lower_limit ? +request.lower_limit : null,
+        details: request.details ? request.details : null,
         created_by: 'system',
         created_dt: 'now()',
         changed_by: 'system',
@@ -174,15 +176,15 @@ const mappedItemCheckFromBody = async (req, isNew) => {
     }
 
     if (isNew) {
-        const findLedger = req.body.ledger_id ? (await queryGET(table.tb_m_ledgers, `WHERE uuid = '${req.body.ledger_id}'`)) : [];
+        const findLedger = request.ledger_id ? (await queryGET(table.tb_m_ledgers, `WHERE uuid = '${request.ledger_id}'`)) : [];
 
         newItem = {
             ...newItem,
-            itemcheck_nm: req.body.itemcheck_nm,
-            ledger_id: req.body.ledger_id ? ledgerIdRaw(req) : null,
-            itemcheck_id: req.body.itemcheck_id ? itemCheckIdRaw(req) : null,
-            ledger_itemcheck_id: req.body.ledger_itemcheck_id ? ledgerItemCheckIdRaw(req) : null,
-            init_counter: findLedger.length > 0 ? findLedger[0].last_counter : req.body.init_counter,
+            itemcheck_nm: request.itemcheck_nm,
+            ledger_id: request.ledger_id ? ledgerIdRaw(request.ledger_id) : null,
+            itemcheck_id: request.itemcheck_id ? itemCheckIdRaw(request.itemcheck_id) : null,
+            ledger_itemcheck_id: request.ledger_itemcheck_id ? ledgerItemCheckIdRaw(request.ledger_itemcheck_id) : null,
+            init_counter: findLedger.length > 0 ? findLedger[0].last_counter : request.init_counter,
         };
     }
 
@@ -284,29 +286,65 @@ module.exports = {
     },
     addItemCheck: async (req, res) => {
         try {
-            const result = await queryTransaction(async (db) => {
-                const findExists = await findExistsAddedOrChanges(db, req, true);
-                if (findExists) {
-                    throw new Error("Item check ini sudah di tambahkan");
-                }
+            await queryTransaction(async (db) => {
+                if (Array.isArray(req.body)) {
+                    const bulkValues = [];
+                    for (let i = 0; i < req.body.length; i++) {
+                        const rawFindLedgerByMachineId = `select tmll.* from ${table.tb_m_ledgers} tmll join ${table.tb_m_machines} tmm on tmll.machine_id = tmm.machine_id where tmm.uuid = '${req.body[i].machine_id}'`;
+                        const findLedgerByMachineIdQuery = (await db.query(rawFindLedgerByMachineId)).rows;
+                        if (findLedgerByMachineIdQuery.length > 0) {
+                            req.body[i].ledger_id = findLedgerByMachineIdQuery[0].uuid
+                        }
 
-                const data = await mappedItemCheckFromBody(req, true);
-                const added = (await queryPostTransaction(db, table.tb_r_ledger_added, data)).rows
-                return added;
+                        const findExists = await findExistsAddedOrChanges(db, req.body[i], true);
+                        if (findExists) {
+                            continue;
+                        }
+
+                        let data = await mappedItemCheckFromBody(req.body[i], true);
+                        bulkValues.push(data);
+                    }
+
+                    const {columns, values} = mapBulkValues(bulkValues);
+                    if (values.length > 0) {
+                        const bulkInsertRaw = `insert into ${table.tb_r_ledger_added} (${columns.join(", ")}) values ${values.join(", ")}`;
+                        await db.query(bulkInsertRaw);
+                    } else {
+                        throw new Error("Semua item check sudah ditambahkan sebelumnya");
+                    }
+                } else {
+                    const itemCheckBody = req.body.itemCheck ? req.body.itemCheck : req.body;
+                    const findExists = await findExistsAddedOrChanges(db, itemCheckBody, true);
+                    if (findExists) {
+                        throw new Error("Item check ini sudah di tambahkan");
+                    }
+
+                    const data = await mappedItemCheckFromBody(itemCheckBody, true);
+                    const insertedItemCheck = await queryPostTransaction(db, table.tb_r_ledger_added, data);
+
+                    if (Array.isArray(req.body.sparepart)) {
+                        const sparepartData = req.body.sparepart.map((item) => {
+                            item.ledger_id = insertedItemCheck.rows[0].ledger_id;
+                            return item;
+                        });
+
+                        await ledgerSparepartServices.ledgerSparepartInsertBulk(db, sparepartData);
+                    }
+                }
             });
 
-            response.success(res, 'sucess add data')
+            response.success(res, 'sucess add data');
         } catch (error) {
             console.log(error);
             response.failed(res, {
                 message: 'Error to add data',
                 error: error,
-            })
+            });
         }
     },
     editItemCheck: async (req, res) => {
         try {
-            let newData = req.body
+            let newData = req.body.itemCheck;
 
             if (!newData.incharge_id) {
                 response.failed(res, 'Incharge is empty, please select incharge first');
@@ -345,14 +383,14 @@ module.exports = {
                 changed_by: 'USER',
                 changed_dt: getCurrentDateTime(),
                 incharge_id_old: oldData.incharge_id,
-                incharge_id_new: newData.incharge_id ? `(select incharge_id from ${table.tb_m_incharge} where uuid = '${req.body.incharge_id}')` : null,
+                incharge_id_new: newData.incharge_id ? `(select incharge_id from ${table.tb_m_incharge} where uuid = '${newData.incharge_id}')` : null,
                 standard_measurement_old: oldData.standard_measurement,
                 standard_measurement_new: newData.standard_measurement,
                 approval: false,
                 uuid: v4(),
                 last_check_dt: oldData.last_check_dt,
                 itemcheck_std_id: oldData.itemcheck_std_id,
-                ledger_id: req.body.ledger_id ? ledgerIdRaw(req) : null,
+                ledger_id: newData.ledger_id ? ledgerIdRaw(newData.ledger_id) : null,
                 upper_limit_old: oldData.upper_limit !== null ? oldData.upper_limit : 0,
                 upper_limit_new: +newData.upper_limit,
                 lower_limit_old: oldData.lower_limit !== null ? oldData.lower_limit : 0,
@@ -540,7 +578,7 @@ module.exports = {
         try {
             const addedItemCheckRaw = `
                     select 
-                        trla.ledger_added_id,
+                        trla.*,
                         tmi.itemcheck_id,
                         tml.ledger_id,
                         tmm.machine_id,
@@ -588,8 +626,7 @@ module.exports = {
                         mp: addedItemChecks.mp,
                         period_id: addedItemChecks.period_id,
                         val_periodic: addedItemChecks.val_periodic,
-                        lifespan_counter: +addedItemChecks.lifespan_counter,
-                        initial_date: addedItemChecks.initial_date,
+                        initial_date: 'now()',
                         created_by: 'approval',
                         created_dt: getCurrentDateTime(),
                         changed_by: 'approval',
@@ -603,11 +640,13 @@ module.exports = {
                         upper_limit: addedItemChecks.upper_limit ? +addedItemChecks.upper_limit : 0,
                     };
 
-                    await queryPostTransaction(
+                    const insertedItemCheck = await queryPostTransaction(
                         db,
                         table.tb_m_itemchecks,
                         item
                     );
+
+                    addedItemChecks.itemcheck_id = insertedItemCheck.rows[0].itemcheck_id;
                 }
 
                 const rawFindExistsLedgerItemCheck = `select * from ${table.tb_r_ledger_itemchecks} where ledger_id = ${addedItemChecks.ledger_id} and itemcheck_id = ${addedItemChecks.itemcheck_id}`;
@@ -644,47 +683,35 @@ module.exports = {
             response.error(res, {
                 message: "Error to approve item request",
                 error: error,
-            })
+            });
         }
     },
     deleteItemCheck: async (req, res) => {
         try {
-            let deleteItemCheck = req.body
-            console.log(deleteItemCheck);
-            let q = `
-                UPDATE tb_r_ledger_itemchecks
-                SET deleted_by = 'HALID', deleted_dt = '${getCurrentDateTime()}', reasons = '${deleteItemCheck.reason}'
-                WHERE ledger_itemcheck_id = ${deleteItemCheck.ledger_itemcheck_id};            
-            `
-            const deleted = await queryCustom(q)
+            const rawWhere = `where uuid = '${req.params.uuid}'`;
+            const findExists = await queryGET(
+                table.tb_r_ledger_itemchecks,
+                rawWhere
+            )
 
-            let deleteSchedule = `
-                UPDATE tb_r_schedules
-                SET deleted_by = 'HALID', deleted_dt = '${getCurrentDateTime()}'
-                WHERE ledger_itemcheck_id = ${deleteItemCheck.ledger_itemcheck_id}
-            `
-            const deleting = await queryCustom(deleteSchedule)
-
-            let deleteHistory = {
-                ledger_deleted_id: await getLastIdData(table.tb_r_ledger_deleted),
-                uuid: v4(),
-                ledger_id: deleteItemCheck.ledger_id,
-                itemcheck_id: deleteItemCheck.itemcheck_id,
-                created_by: 'USER',
-                created_dt: getCurrentDateTime(),
-                changed_by: 'USER',
-                changed_dt: getCurrentDateTime(),
-                last_check_dt: deleteItemCheck.last_check_dt,
-                reasons: deleteItemCheck.reason
+            if (findExists && findExists.length === 0) {
+                response.error(res, "Error to delete item check, item check not found");
+                return;
             }
 
-            console.log(deleteHistory);
+            await querySoftDELETE(
+                table.tb_r_ledger_itemchecks,
+                rawWhere.replace("where", " "),
+                'user'
+            );
 
-            const set = await queryPOST(table.tb_r_ledger_deleted, deleteHistory)
-
-            response.success(res, 'data deleted', deleted)
+            response.success(res, 'Success to delete item check')
         } catch (error) {
             console.log(error);
+            response.error(res, {
+                message: "Error to delete item check",
+                error: error,
+            });
         }
     },
     denyNewItem: async (req, res) => {

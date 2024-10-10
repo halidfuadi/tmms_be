@@ -310,9 +310,14 @@ module.exports = {
                     value = `'${data[key]}'`;
                 }
 
-                containerValues.push(
-                    data[key] && data[key] != "null" ? `${value}` : "NULL"
-                );
+                if (typeof data[key] === "number") {
+                    containerValues.push(`${value}`);
+                } else {
+                    containerValues.push(
+                        data[key] && data[key] != "null" ? `${value}` : "NULL"
+                    );
+                }
+
             }
             let q = `INSERT INTO ${table}(${containerColumn.join(
         ","
@@ -365,5 +370,34 @@ module.exports = {
                     reject(err);
                 });
         });
+    },
+    mapBulkValues: (data) => {
+        const values = data.map((item) => {
+            let containerValues = [];
+            for (const key in item) {
+                if (key != "childs") {
+                    if (item[key]) {
+                        if (typeof item[key] == "object") {
+                            containerValues.push(`'{${item[key].join(",")}}'`);
+                        } else if (typeof item[key] == "string" && item[key].toLowerCase().includes("select")) {
+                            containerValues.push(item[key]);
+                        } else {
+                            containerValues.push(`'${item[key]}'`);
+                        }
+                    } else if (typeof item[key] == "boolean") {
+                        containerValues.push(item[key]);
+                    } else {
+                        containerValues.push(`NULL`);
+                    }
+                }
+            }
+
+            return `(${containerValues.join(",")})`;
+        });
+
+        return {
+            columns: Object.keys(data[0]),
+            values
+        }
     },
 };
