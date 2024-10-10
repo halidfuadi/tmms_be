@@ -8,4 +8,4 @@ const uuidToId = async(table, col, uuid) => {
 }
 
 
-module.export = uuidToId
+module.exports = uuidToId
